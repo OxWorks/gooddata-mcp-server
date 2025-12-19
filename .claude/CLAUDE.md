@@ -113,12 +113,12 @@ This project includes an MCP server that exposes GoodData tools to Claude Code.
 | `mcp__gooddata__get_dashboard_insights` | Get all insights from a specific dashboard |
 | `mcp__gooddata__list_metrics` | List metrics in a workspace |
 | `mcp__gooddata__list_datasets` | List datasets in a workspace |
+| `mcp__gooddata__get_logical_data_model` | Get/download the logical data model (LDM) |
 | `mcp__gooddata__list_users` | List all users |
 | `mcp__gooddata__list_user_groups` | List all user groups |
 | `mcp__gooddata__get_user_group_members` | Get members of a group |
 | `mcp__gooddata__get_insight_metadata` | Get detailed metadata (tags, creator, dates, etc.) |
 | `mcp__gooddata__get_insight_data` | Get data from an insight |
-| `mcp__gooddata__ai_chat` | AI-powered natural language query |
 | `mcp__gooddata__export_dashboard_pdf` | Export dashboard to PDF |
 | `mcp__gooddata__export_visualization_csv` | Export visualization to CSV |
 | `mcp__gooddata__export_visualization_xlsx` | Export visualization to Excel |

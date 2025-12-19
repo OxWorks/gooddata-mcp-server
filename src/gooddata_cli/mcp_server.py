@@ -228,6 +228,73 @@ def list_datasets(workspace_id: str | None = None) -> str:
     return json.dumps(result, indent=2)
 
 
+@mcp.tool()
+def get_logical_data_model(
+    workspace_id: str | None = None,
+    output_path: str | None = None,
+) -> str:
+    """Get the logical data model (LDM) for a workspace.
+
+    The LDM contains all datasets, attributes, labels, facts, and their relationships.
+    This is useful for understanding the data structure and for documentation.
+
+    Args:
+        workspace_id: The workspace ID. Uses GOODDATA_WORKSPACE env var if not provided.
+        output_path: Optional file path to save the LDM. If provided, saves as JSON file.
+
+    Returns:
+        JSON containing the full logical data model structure, or path to saved file.
+    """
+    sdk = _get_sdk()
+    ws_id = _get_workspace_id(workspace_id)
+
+    # Get the declarative LDM
+    ldm = sdk.catalog_workspace_content.get_declarative_ldm(ws_id)
+    ldm_dict = ldm.to_dict()
+
+    # Build a summary
+    datasets = ldm_dict.get("ldm", {}).get("datasets", [])
+    date_instances = ldm_dict.get("ldm", {}).get("dateInstances", [])
+
+    summary = {
+        "workspace_id": ws_id,
+        "dataset_count": len(datasets),
+        "date_instance_count": len(date_instances),
+        "datasets": [],
+    }
+
+    for ds in datasets:
+        ds_summary = {
+            "id": ds.get("id"),
+            "title": ds.get("title"),
+            "attribute_count": len(ds.get("attributes", [])),
+            "fact_count": len(ds.get("facts", [])),
+            "reference_count": len(ds.get("references", [])),
+        }
+        summary["datasets"].append(ds_summary)
+
+    if output_path:
+        # Save full LDM to file
+        output_dir = Path(output_path).parent
+        if output_dir and str(output_dir) != ".":
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(output_path, "w") as f:
+            json.dump(ldm_dict, f, indent=2, default=str)
+
+        return json.dumps({
+            "success": True,
+            "path": os.path.abspath(output_path),
+            "summary": summary,
+        }, indent=2)
+
+    # Return summary with full LDM
+    return json.dumps({
+        "summary": summary,
+        "ldm": ldm_dict,
+    }, indent=2, default=str)
+
+
 # =============================================================================
 # USER & GROUP TOOLS (Read-Only)
 # =============================================================================
@@ -464,25 +531,6 @@ def get_insight_data(insight_id: str, workspace_id: str | None = None) -> str:
     }
 
     return json.dumps(result, indent=2, default=str)
-
-
-@mcp.tool()
-def ai_chat(question: str, workspace_id: str | None = None) -> str:
-    """Ask a natural language question about your GoodData data.
-
-    Uses GoodData's AI to answer questions about metrics, trends, etc.
-
-    Args:
-        question: The natural language question to ask.
-        workspace_id: The workspace ID. Uses GOODDATA_WORKSPACE env var if not provided.
-
-    Returns the AI's response.
-    """
-    sdk = _get_sdk()
-    ws_id = _get_workspace_id(workspace_id)
-
-    response = sdk.compute.ai_chat(ws_id, question)
-    return response.text_response
 
 
 # =============================================================================

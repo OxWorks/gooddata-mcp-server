@@ -22,6 +22,7 @@ mcp = FastMCP("gooddata")
 def _load_env():
     """Load environment variables from .env file."""
     from dotenv import load_dotenv
+
     env_path = Path(__file__).parent.parent.parent / ".env"
     if env_path.exists():
         load_dotenv(env_path)
@@ -61,6 +62,7 @@ def _get_workspace_id(workspace_id: str | None = None) -> str:
 # LIST TOOLS (Read-Only)
 # =============================================================================
 
+
 @mcp.tool()
 def list_workspaces() -> str:
     """List all available GoodData workspaces.
@@ -88,10 +90,7 @@ def list_insights(workspace_id: str | None = None) -> str:
 
     am = sdk.catalog_workspace_content.get_declarative_analytics_model(ws_id)
 
-    result = [
-        {"id": viz.id, "title": viz.title}
-        for viz in am.analytics.visualization_objects
-    ]
+    result = [{"id": viz.id, "title": viz.title} for viz in am.analytics.visualization_objects]
     return json.dumps(result, indent=2)
 
 
@@ -109,10 +108,7 @@ def list_dashboards(workspace_id: str | None = None) -> str:
 
     am = sdk.catalog_workspace_content.get_declarative_analytics_model(ws_id)
 
-    result = [
-        {"id": db.id, "title": db.title}
-        for db in am.analytics.analytical_dashboards
-    ]
+    result = [{"id": db.id, "title": db.title} for db in am.analytics.analytical_dashboards]
     return json.dumps(result, indent=2)
 
 
@@ -142,10 +138,7 @@ def get_dashboard_insights(dashboard_id: str, workspace_id: str | None = None) -
         return json.dumps({"error": f"Dashboard '{dashboard_id}' not found"})
 
     # Build a lookup of all visualization objects by ID
-    viz_lookup = {
-        viz.id: viz.title
-        for viz in am.analytics.visualization_objects
-    }
+    viz_lookup = {viz.id: viz.title for viz in am.analytics.visualization_objects}
 
     # Extract insight IDs from dashboard layout
     insight_ids = []
@@ -163,11 +156,13 @@ def get_dashboard_insights(dashboard_id: str, workspace_id: str | None = None) -
                 if identifier.get("type") == "visualizationObject":
                     insight_id = identifier.get("id")
                     if insight_id:
-                        insight_ids.append({
-                            "id": insight_id,
-                            "title": viz_lookup.get(insight_id, widget.get("title", "")),
-                            "widget_title": widget.get("title", ""),
-                        })
+                        insight_ids.append(
+                            {
+                                "id": insight_id,
+                                "title": viz_lookup.get(insight_id, widget.get("title", "")),
+                                "widget_title": widget.get("title", ""),
+                            }
+                        )
 
     result = {
         "dashboard_id": dashboard_id,
@@ -201,7 +196,9 @@ def list_metrics(workspace_id: str | None = None) -> str:
             "obj_id": getattr(m, "obj_id", None),
             "json_api_attributes": getattr(m, "json_api_attributes", None),
             "json_api_related_entities_data": getattr(m, "json_api_related_entities_data", None),
-            "json_api_related_entities_side_loads": getattr(m, "json_api_related_entities_side_loads", None),
+            "json_api_related_entities_side_loads": getattr(
+                m, "json_api_related_entities_side_loads", None
+            ),
             "json_api_relationships": getattr(m, "json_api_relationships", None),
             "json_api_side_loads": getattr(m, "json_api_side_loads", None),
         }
@@ -282,22 +279,30 @@ def get_logical_data_model(
         with open(output_path, "w") as f:
             json.dump(ldm_dict, f, indent=2, default=str)
 
-        return json.dumps({
-            "success": True,
-            "path": os.path.abspath(output_path),
-            "summary": summary,
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": True,
+                "path": os.path.abspath(output_path),
+                "summary": summary,
+            },
+            indent=2,
+        )
 
     # Return summary with full LDM
-    return json.dumps({
-        "summary": summary,
-        "ldm": ldm_dict,
-    }, indent=2, default=str)
+    return json.dumps(
+        {
+            "summary": summary,
+            "ldm": ldm_dict,
+        },
+        indent=2,
+        default=str,
+    )
 
 
 # =============================================================================
 # USER & GROUP TOOLS (Read-Only)
 # =============================================================================
+
 
 @mcp.tool()
 def list_users() -> str:
@@ -328,10 +333,7 @@ def list_user_groups() -> str:
     sdk = _get_sdk()
     groups = sdk.catalog_user.list_user_groups()
 
-    result = [
-        {"id": g.id, "name": getattr(g, "name", None)}
-        for g in groups
-    ]
+    result = [{"id": g.id, "name": getattr(g, "name", None)} for g in groups]
     return json.dumps(result, indent=2)
 
 
@@ -361,6 +363,7 @@ def get_user_group_members(group_id: str) -> str:
 # =============================================================================
 # QUERY TOOLS (Read-Only)
 # =============================================================================
+
 
 @mcp.tool()
 def get_insight_metadata(insight_id: str, workspace_id: str | None = None) -> str:
@@ -441,12 +444,20 @@ def get_insight_metadata(insight_id: str, workspace_id: str | None = None) -> st
         for item in bucket.get("items", []):
             if "measure" in item:
                 measure = item["measure"]
-                metric_id = measure.get("definition", {}).get("measureDefinition", {}).get("item", {}).get("identifier", {}).get("id")
+                metric_id = (
+                    measure.get("definition", {})
+                    .get("measureDefinition", {})
+                    .get("item", {})
+                    .get("identifier", {})
+                    .get("id")
+                )
                 if metric_id:
-                    metrics.append({
-                        "id": metric_id,
-                        "title": measure.get("title"),
-                    })
+                    metrics.append(
+                        {
+                            "id": metric_id,
+                            "title": measure.get("title"),
+                        }
+                    )
             if "attribute" in item:
                 attr_item = item["attribute"]
                 attr_id = attr_item.get("displayForm", {}).get("identifier", {}).get("id")
@@ -458,18 +469,24 @@ def get_insight_metadata(insight_id: str, workspace_id: str | None = None) -> st
     for f in content.get("filters", []):
         if "positiveAttributeFilter" in f:
             pf = f["positiveAttributeFilter"]
-            filters.append({
-                "type": "positive",
-                "attribute": pf.get("displayForm", {}).get("identifier", {}).get("id"),
-                "values": pf.get("in", {}).get("values", []),
-            })
+            filters.append(
+                {
+                    "type": "positive",
+                    "attribute": pf.get("displayForm", {}).get("identifier", {}).get("id"),
+                    "values": pf.get("in", {}).get("values", []),
+                }
+            )
         elif "negativeAttributeFilter" in f:
             nf = f["negativeAttributeFilter"]
-            filters.append({
-                "type": "negative",
-                "attribute": nf.get("displayForm", {}).get("identifier", {}).get("id"),
-                "values": nf.get("notIn", {}).get("values", nf.get("notIn", {}).get("uris", [])),
-            })
+            filters.append(
+                {
+                    "type": "negative",
+                    "attribute": nf.get("displayForm", {}).get("identifier", {}).get("id"),
+                    "values": nf.get("notIn", {}).get(
+                        "values", nf.get("notIn", {}).get("uris", [])
+                    ),
+                }
+            )
 
     result = {
         "id": viz_data.get("id"),
@@ -537,6 +554,7 @@ def get_insight_data(insight_id: str, workspace_id: str | None = None) -> str:
 # EXPORT TOOLS (Read-Only - exports to local files)
 # =============================================================================
 
+
 @mcp.tool()
 def export_dashboard_pdf(
     dashboard_id: str,
@@ -566,10 +584,12 @@ def export_dashboard_pdf(
         file_name=output_path,
     )
 
-    return json.dumps({
-        "success": True,
-        "path": os.path.abspath(output_path),
-    })
+    return json.dumps(
+        {
+            "success": True,
+            "path": os.path.abspath(output_path),
+        }
+    )
 
 
 @mcp.tool()
@@ -602,10 +622,12 @@ def export_visualization_csv(
         file_format="CSV",
     )
 
-    return json.dumps({
-        "success": True,
-        "path": os.path.abspath(output_path),
-    })
+    return json.dumps(
+        {
+            "success": True,
+            "path": os.path.abspath(output_path),
+        }
+    )
 
 
 @mcp.tool()
@@ -638,10 +660,12 @@ def export_visualization_xlsx(
         file_format="XLSX",
     )
 
-    return json.dumps({
-        "success": True,
-        "path": os.path.abspath(output_path),
-    })
+    return json.dumps(
+        {
+            "success": True,
+            "path": os.path.abspath(output_path),
+        }
+    )
 
 
 # =============================================================================

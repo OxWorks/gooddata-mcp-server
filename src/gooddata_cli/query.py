@@ -31,10 +31,7 @@ def list_insights(workspace_id: str | None = None) -> list[dict[str, str]]:
 
     am = sdk.catalog_workspace_content.get_declarative_analytics_model(ws_id)
 
-    return [
-        {"id": viz.id, "title": viz.title}
-        for viz in am.analytics.visualization_objects
-    ]
+    return [{"id": viz.id, "title": viz.title} for viz in am.analytics.visualization_objects]
 
 
 def list_dashboards(workspace_id: str | None = None) -> list[dict[str, str]]:
@@ -51,10 +48,7 @@ def list_dashboards(workspace_id: str | None = None) -> list[dict[str, str]]:
 
     am = sdk.catalog_workspace_content.get_declarative_analytics_model(ws_id)
 
-    return [
-        {"id": db.id, "title": db.title}
-        for db in am.analytics.analytical_dashboards
-    ]
+    return [{"id": db.id, "title": db.title} for db in am.analytics.analytical_dashboards]
 
 
 def list_metrics(workspace_id: str | None = None) -> list[dict[str, Any]]:
@@ -124,5 +118,3 @@ def get_insight_data(
             "headers": [h.header_value for h in result.headers],
             "data": result.data,
         }
-
-

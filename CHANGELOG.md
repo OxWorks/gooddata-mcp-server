@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `get_dashboard_filters` MCP tool - Retrieve all attribute and date filters configured on a dashboard
 - LICENSE file (MIT)
 - CONTRIBUTING.md with development guidelines
 - GitHub issue and PR templates

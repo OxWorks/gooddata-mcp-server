@@ -90,6 +90,7 @@ In Claude Code, you can now ask questions like:
 | `list_metrics` | List all metrics in a workspace |
 | `list_datasets` | List all datasets in a workspace |
 | `get_dashboard_insights` | Get all insights contained in a dashboard |
+| `get_dashboard_filters` | Get all filters configured on a dashboard |
 | `get_insight_metadata` | Get detailed metadata for an insight |
 | `get_insight_data` | Get data from an insight |
 | `get_logical_data_model` | Get the workspace's logical data model |

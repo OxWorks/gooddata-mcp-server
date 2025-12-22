@@ -111,6 +111,7 @@ This project includes an MCP server that exposes GoodData tools to Claude Code.
 | `mcp__gooddata__list_insights` | List insights in a workspace |
 | `mcp__gooddata__list_dashboards` | List dashboards in a workspace |
 | `mcp__gooddata__get_dashboard_insights` | Get all insights from a specific dashboard |
+| `mcp__gooddata__get_dashboard_filters` | Get all filters configured on a dashboard |
 | `mcp__gooddata__list_metrics` | List metrics in a workspace |
 | `mcp__gooddata__list_datasets` | List datasets in a workspace |
 | `mcp__gooddata__get_logical_data_model` | Get/download the logical data model (LDM) |

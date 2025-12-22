@@ -113,6 +113,98 @@ def list_dashboards(workspace_id: str | None = None) -> str:
 
 
 @mcp.tool()
+def get_dashboard_filters(dashboard_id: str, workspace_id: str | None = None) -> str:
+    """Get all filters configured on a specific dashboard.
+
+    Args:
+        dashboard_id: The dashboard ID to get filters from.
+        workspace_id: The workspace ID. Uses GOODDATA_WORKSPACE env var if not provided.
+
+    Returns a JSON object with dashboard filter information including:
+        - attribute filters (dropdown filters) with display form IDs
+        - date filters with granularity and range
+        - current filter values/selections
+    """
+    sdk = _get_sdk()
+    ws_id = _get_workspace_id(workspace_id)
+
+    am = sdk.catalog_workspace_content.get_declarative_analytics_model(ws_id)
+
+    # Find the dashboard
+    dashboard = None
+    for db in am.analytics.analytical_dashboards:
+        if db.id == dashboard_id:
+            dashboard = db
+            break
+
+    if not dashboard:
+        return json.dumps({"error": f"Dashboard '{dashboard_id}' not found"})
+
+    content = dashboard.content
+
+    # Extract filter context reference
+    filter_context_ref = content.get("filterContextRef", {})
+    filter_context_id = filter_context_ref.get("identifier", {}).get("id")
+
+    # Look up the filterContext object to get the actual filters
+    filter_context_content = None
+    if filter_context_id:
+        for fc in am.analytics.filter_contexts:
+            if fc.id == filter_context_id:
+                filter_context_content = fc.content
+                break
+
+    # Parse the filters from the filter context
+    attribute_filters = []
+    date_filters = []
+
+    if filter_context_content:
+        for f in filter_context_content.get("filters", []):
+            if "attributeFilter" in f:
+                af = f["attributeFilter"]
+                # Handle both nested and flat identifier formats
+                display_form = af.get("displayForm", {})
+                identifier = display_form.get("identifier", display_form)
+                if isinstance(identifier, dict):
+                    display_form_id = identifier.get("id", identifier.get("identifier"))
+                else:
+                    display_form_id = identifier
+
+                attribute_filters.append(
+                    {
+                        "displayForm": display_form_id,
+                        "localIdentifier": af.get("localIdentifier"),
+                        "negativeSelection": af.get("negativeSelection", False),
+                        "selectionMode": af.get("selectionMode", "multi"),
+                        "selectedValues": af.get("attributeElements", {}).get("uris", []),
+                    }
+                )
+
+            elif "dateFilter" in f:
+                df = f["dateFilter"]
+                date_filters.append(
+                    {
+                        "type": df.get("type"),
+                        "granularity": df.get("granularity"),
+                        "from": df.get("from"),
+                        "to": df.get("to"),
+                        "localIdentifier": df.get("localIdentifier"),
+                    }
+                )
+
+    result = {
+        "dashboard_id": dashboard_id,
+        "dashboard_title": dashboard.title,
+        "filter_context_id": filter_context_id,
+        "attribute_filters": attribute_filters,
+        "attribute_filter_count": len(attribute_filters),
+        "date_filters": date_filters,
+        "date_filter_count": len(date_filters),
+    }
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
 def get_dashboard_insights(dashboard_id: str, workspace_id: str | None = None) -> str:
     """Get all insights (visualizations) contained in a specific dashboard.
 

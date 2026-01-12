@@ -909,6 +909,873 @@ def export_visualization_xlsx(
 
 
 # =============================================================================
+# METRIC TOOLS (Read + Write)
+# =============================================================================
+
+
+@mcp.tool()
+def get_metric(metric_id: str, customer: str | None = None) -> str:
+    """Get detailed definition for a specific metric.
+
+    Returns the full metric definition including MAQL, format, and metadata.
+
+    Args:
+        metric_id: The metric ID to get.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+
+    Returns:
+        JSON with metric details including:
+        - id, title, description
+        - format (e.g., "#,##0.00", "$#,##0.00", "#,##0.00%")
+        - maql (the metric definition)
+        - tags, createdAt, modifiedAt
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    ws_id = _resolve_workspace_id(customer)
+
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics/{metric_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+
+    attrs = data["data"]["attributes"]
+    content = attrs.get("content", {})
+
+    result = {
+        "id": data["data"]["id"],
+        "title": attrs.get("title"),
+        "description": attrs.get("description"),
+        "format": content.get("format"),
+        "maql": content.get("maql"),
+        "tags": attrs.get("tags", []),
+        "createdAt": attrs.get("createdAt"),
+        "modifiedAt": attrs.get("modifiedAt"),
+    }
+
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+def preview_update_metric(
+    metric_id: str,
+    customer: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    format: str | None = None,
+    maql: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """Preview updating a metric (READ-ONLY).
+
+    This shows what changes would be made to the metric.
+    No changes are made. Use apply_update_metric to execute the change.
+
+    Args:
+        metric_id: The metric ID to update.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+        title: New title for the metric. None to keep current.
+        description: New description. None to keep current.
+        format: New format string (e.g., "#,##0.00%", "$#,##0.00"). None to keep current.
+        maql: New MAQL definition. None to keep current.
+        tags: New tags list. None to keep current.
+
+    Returns:
+        JSON with:
+        - current_values: Current metric properties
+        - proposed_changes: What would be changed
+        - confirmation_token: Token to pass to apply_update_metric
+        - next_step: Instructions for applying the change
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current metric definition
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics/{metric_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+
+    attrs = data["data"]["attributes"]
+    content = attrs.get("content", {})
+
+    current_values = {
+        "title": attrs.get("title"),
+        "description": attrs.get("description"),
+        "format": content.get("format"),
+        "maql": content.get("maql"),
+        "tags": attrs.get("tags", []),
+    }
+
+    # Determine what would change
+    proposed_changes = {}
+    if title is not None and title != current_values["title"]:
+        proposed_changes["title"] = {"from": current_values["title"], "to": title}
+    if description is not None and description != current_values["description"]:
+        proposed_changes["description"] = {"from": current_values["description"], "to": description}
+    if format is not None and format != current_values["format"]:
+        proposed_changes["format"] = {"from": current_values["format"], "to": format}
+    if maql is not None and maql != current_values["maql"]:
+        proposed_changes["maql"] = {"from": current_values["maql"], "to": maql}
+    if tags is not None and tags != current_values["tags"]:
+        proposed_changes["tags"] = {"from": current_values["tags"], "to": tags}
+
+    if not proposed_changes:
+        return json.dumps({
+            "metric_id": metric_id,
+            "message": "No changes proposed. All provided values match current values.",
+            "current_values": current_values,
+        }, indent=2)
+
+    # Generate confirmation token
+    token_data = f"{metric_id}:{json.dumps(proposed_changes, sort_keys=True)}"
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview action
+    _log_audit(
+        customer=customer_name,
+        operation="preview_update_metric",
+        object_id=metric_id,
+        status="preview",
+        details={"changes": list(proposed_changes.keys())},
+    )
+
+    result = {
+        "metric_id": metric_id,
+        "metric_title": current_values["title"],
+        "current_values": current_values,
+        "proposed_changes": proposed_changes,
+        "change_count": len(proposed_changes),
+        "confirmation_token": confirmation_token,
+        "next_step": (
+            f"To apply this change, call: apply_update_metric("
+            f"metric_id='{metric_id}', confirmation_token='{confirmation_token}', "
+            + ", ".join(f"{k}='{v['to']}'" for k, v in proposed_changes.items() if k != "tags")
+            + (f", tags={proposed_changes['tags']['to']}" if "tags" in proposed_changes else "")
+            + f", customer='{customer_name}')"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_update_metric(
+    metric_id: str,
+    confirmation_token: str,
+    customer: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    format: str | None = None,
+    maql: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """Apply updates to a metric (WRITE OPERATION).
+
+    This modifies the metric in GoodData. A backup is automatically created
+    before any changes are made.
+
+    You must first call preview_update_metric to get the confirmation_token.
+
+    Args:
+        metric_id: The metric ID to update.
+        confirmation_token: Token from preview_update_metric.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+        title: New title for the metric. None to keep current.
+        description: New description. None to keep current.
+        format: New format string (e.g., "#,##0.00%", "$#,##0.00"). None to keep current.
+        maql: New MAQL definition. None to keep current.
+        tags: New tags list. None to keep current.
+
+    Returns:
+        JSON with:
+        - success: Whether the operation succeeded
+        - backup_path: Path to the backup file (for rollback if needed)
+        - changes_applied: What was changed
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current metric definition
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics/{metric_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+        "Content-Type": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+
+    attrs = data["data"]["attributes"]
+    content = attrs.get("content", {})
+
+    current_values = {
+        "title": attrs.get("title"),
+        "description": attrs.get("description"),
+        "format": content.get("format"),
+        "maql": content.get("maql"),
+        "tags": attrs.get("tags", []),
+    }
+
+    # Determine what would change (must match preview)
+    proposed_changes = {}
+    if title is not None and title != current_values["title"]:
+        proposed_changes["title"] = {"from": current_values["title"], "to": title}
+    if description is not None and description != current_values["description"]:
+        proposed_changes["description"] = {"from": current_values["description"], "to": description}
+    if format is not None and format != current_values["format"]:
+        proposed_changes["format"] = {"from": current_values["format"], "to": format}
+    if maql is not None and maql != current_values["maql"]:
+        proposed_changes["maql"] = {"from": current_values["maql"], "to": maql}
+    if tags is not None and tags != current_values["tags"]:
+        proposed_changes["tags"] = {"from": current_values["tags"], "to": tags}
+
+    if not proposed_changes:
+        return json.dumps({
+            "success": False,
+            "error": "No changes to apply. All provided values match current values.",
+        }, indent=2)
+
+    # Verify confirmation token matches current state
+    token_data = f"{metric_id}:{json.dumps(proposed_changes, sort_keys=True)}"
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_update_metric",
+            object_id=metric_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps({
+            "success": False,
+            "error": "Invalid confirmation token. The metric may have changed since preview.",
+            "message": "Please run preview_update_metric again to get a new token.",
+        }, indent=2)
+
+    # Save backup BEFORE making any changes
+    backup_path = _save_backup(customer_name, "metric", metric_id, data)
+
+    # Apply changes to the data structure
+    if title is not None:
+        attrs["title"] = title
+    if description is not None:
+        attrs["description"] = description
+    if format is not None:
+        content["format"] = format
+    if maql is not None:
+        content["maql"] = maql
+    if tags is not None:
+        attrs["tags"] = tags
+
+    # Update the metric via PUT
+    try:
+        response = requests.put(url, headers=headers, json=data)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_update_metric",
+            object_id=metric_id,
+            status="error",
+            details={"error": str(e), "backup_path": str(backup_path)},
+        )
+        return json.dumps({
+            "success": False,
+            "error": f"Failed to update metric: {e}",
+            "backup_path": str(backup_path),
+            "message": "Backup was saved. Use restore_metric_from_backup to restore if needed.",
+        }, indent=2)
+
+    # Log successful change
+    _log_audit(
+        customer=customer_name,
+        operation="apply_update_metric",
+        object_id=metric_id,
+        status="success",
+        details={
+            "changes": proposed_changes,
+            "backup_path": str(backup_path),
+        },
+    )
+
+    return json.dumps({
+        "success": True,
+        "metric_id": metric_id,
+        "backup_path": str(backup_path),
+        "changes_applied": proposed_changes,
+        "message": f"Successfully updated metric '{metric_id}'. Backup saved.",
+    }, indent=2)
+
+
+@mcp.tool()
+def preview_create_metric(
+    metric_id: str,
+    title: str,
+    maql: str,
+    customer: str | None = None,
+    description: str | None = None,
+    format: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """Preview creating a new metric (READ-ONLY).
+
+    This shows what metric would be created.
+    No changes are made. Use apply_create_metric to execute the creation.
+
+    Args:
+        metric_id: The ID for the new metric (lowercase, underscores, no spaces).
+        title: Display title for the metric.
+        maql: MAQL definition for the metric.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+        description: Optional description.
+        format: Optional format string (e.g., "#,##0.00%", "$#,##0.00").
+        tags: Optional list of tags.
+
+    Returns:
+        JSON with:
+        - metric_definition: The metric that would be created
+        - confirmation_token: Token to pass to apply_create_metric
+        - next_step: Instructions for applying the creation
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Check if metric already exists
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics/{metric_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return json.dumps({
+            "success": False,
+            "error": f"Metric '{metric_id}' already exists. Use preview_update_metric instead.",
+        }, indent=2)
+
+    # Build the metric definition
+    metric_definition = {
+        "id": metric_id,
+        "title": title,
+        "maql": maql,
+        "description": description or "",
+        "format": format or "#,##0",
+        "tags": tags or [],
+    }
+
+    # Generate confirmation token
+    token_data = f"create:{metric_id}:{json.dumps(metric_definition, sort_keys=True)}"
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview action
+    _log_audit(
+        customer=customer_name,
+        operation="preview_create_metric",
+        object_id=metric_id,
+        status="preview",
+        details={"title": title},
+    )
+
+    result = {
+        "action": "create",
+        "metric_definition": metric_definition,
+        "confirmation_token": confirmation_token,
+        "next_step": (
+            f"To create this metric, call: apply_create_metric("
+            f"metric_id='{metric_id}', title='{title}', maql='{maql}', "
+            f"confirmation_token='{confirmation_token}', customer='{customer_name}')"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_create_metric(
+    metric_id: str,
+    title: str,
+    maql: str,
+    confirmation_token: str,
+    customer: str | None = None,
+    description: str | None = None,
+    format: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """Create a new metric (WRITE OPERATION).
+
+    You must first call preview_create_metric to get the confirmation_token.
+
+    Args:
+        metric_id: The ID for the new metric (lowercase, underscores, no spaces).
+        title: Display title for the metric.
+        maql: MAQL definition for the metric.
+        confirmation_token: Token from preview_create_metric.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+        description: Optional description.
+        format: Optional format string (e.g., "#,##0.00%", "$#,##0.00").
+        tags: Optional list of tags.
+
+    Returns:
+        JSON with:
+        - success: Whether the operation succeeded
+        - metric_id: The ID of the created metric
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Build and verify the metric definition matches token
+    metric_definition = {
+        "id": metric_id,
+        "title": title,
+        "maql": maql,
+        "description": description or "",
+        "format": format or "#,##0",
+        "tags": tags or [],
+    }
+
+    token_data = f"create:{metric_id}:{json.dumps(metric_definition, sort_keys=True)}"
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_create_metric",
+            object_id=metric_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps({
+            "success": False,
+            "error": "Invalid confirmation token. Parameters may have changed since preview.",
+            "message": "Please run preview_create_metric again to get a new token.",
+        }, indent=2)
+
+    # Build the API payload
+    payload = {
+        "data": {
+            "type": "metric",
+            "id": metric_id,
+            "attributes": {
+                "title": title,
+                "description": description or "",
+                "tags": tags or [],
+                "content": {
+                    "maql": maql,
+                    "format": format or "#,##0",
+                },
+            },
+        }
+    }
+
+    # Create the metric via POST
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+        "Content-Type": "application/vnd.gooddata.api+json",
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_create_metric",
+            object_id=metric_id,
+            status="error",
+            details={"error": str(e)},
+        )
+        return json.dumps({
+            "success": False,
+            "error": f"Failed to create metric: {e}",
+        }, indent=2)
+
+    # Log successful creation
+    _log_audit(
+        customer=customer_name,
+        operation="apply_create_metric",
+        object_id=metric_id,
+        status="success",
+        details={"title": title, "maql": maql},
+    )
+
+    return json.dumps({
+        "success": True,
+        "metric_id": metric_id,
+        "title": title,
+        "message": f"Successfully created metric '{metric_id}'.",
+    }, indent=2)
+
+
+@mcp.tool()
+def preview_delete_metric(
+    metric_id: str,
+    customer: str | None = None,
+) -> str:
+    """Preview deleting a metric (READ-ONLY).
+
+    This shows the metric that would be deleted and checks for dependencies.
+    No changes are made. Use apply_delete_metric to execute the deletion.
+
+    Args:
+        metric_id: The metric ID to delete.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+
+    Returns:
+        JSON with:
+        - metric_to_delete: The metric that would be deleted
+        - confirmation_token: Token to pass to apply_delete_metric
+        - next_step: Instructions for applying the deletion
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current metric definition
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics/{metric_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 404:
+        return json.dumps({
+            "success": False,
+            "error": f"Metric '{metric_id}' not found.",
+        }, indent=2)
+    response.raise_for_status()
+    data = response.json()
+
+    attrs = data["data"]["attributes"]
+    content = attrs.get("content", {})
+
+    metric_to_delete = {
+        "id": metric_id,
+        "title": attrs.get("title"),
+        "description": attrs.get("description"),
+        "format": content.get("format"),
+        "maql": content.get("maql"),
+        "tags": attrs.get("tags", []),
+    }
+
+    # Generate confirmation token
+    token_data = f"delete:{metric_id}:{attrs.get('title')}"
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview action
+    _log_audit(
+        customer=customer_name,
+        operation="preview_delete_metric",
+        object_id=metric_id,
+        status="preview",
+        details={"title": attrs.get("title")},
+    )
+
+    result = {
+        "action": "delete",
+        "metric_to_delete": metric_to_delete,
+        "warning": "This will permanently delete the metric. A backup will be saved before deletion.",
+        "confirmation_token": confirmation_token,
+        "next_step": (
+            f"To delete this metric, call: apply_delete_metric("
+            f"metric_id='{metric_id}', confirmation_token='{confirmation_token}', "
+            f"customer='{customer_name}')"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_delete_metric(
+    metric_id: str,
+    confirmation_token: str,
+    customer: str | None = None,
+) -> str:
+    """Delete a metric (WRITE OPERATION).
+
+    This permanently deletes the metric from GoodData. A backup is automatically
+    created before deletion for potential recovery.
+
+    You must first call preview_delete_metric to get the confirmation_token.
+
+    Args:
+        metric_id: The metric ID to delete.
+        confirmation_token: Token from preview_delete_metric.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+
+    Returns:
+        JSON with:
+        - success: Whether the operation succeeded
+        - backup_path: Path to the backup file (for recovery if needed)
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current metric to verify and backup
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics/{metric_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 404:
+        return json.dumps({
+            "success": False,
+            "error": f"Metric '{metric_id}' not found.",
+        }, indent=2)
+    response.raise_for_status()
+    data = response.json()
+
+    attrs = data["data"]["attributes"]
+
+    # Verify confirmation token
+    token_data = f"delete:{metric_id}:{attrs.get('title')}"
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_delete_metric",
+            object_id=metric_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps({
+            "success": False,
+            "error": "Invalid confirmation token. The metric may have changed since preview.",
+            "message": "Please run preview_delete_metric again to get a new token.",
+        }, indent=2)
+
+    # Save backup BEFORE deletion
+    backup_path = _save_backup(customer_name, "metric", metric_id, data)
+
+    # Delete the metric
+    try:
+        response = requests.delete(url, headers=headers)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_delete_metric",
+            object_id=metric_id,
+            status="error",
+            details={"error": str(e), "backup_path": str(backup_path)},
+        )
+        return json.dumps({
+            "success": False,
+            "error": f"Failed to delete metric: {e}",
+            "backup_path": str(backup_path),
+        }, indent=2)
+
+    # Log successful deletion
+    _log_audit(
+        customer=customer_name,
+        operation="apply_delete_metric",
+        object_id=metric_id,
+        status="success",
+        details={
+            "title": attrs.get("title"),
+            "backup_path": str(backup_path),
+        },
+    )
+
+    return json.dumps({
+        "success": True,
+        "metric_id": metric_id,
+        "title": attrs.get("title"),
+        "backup_path": str(backup_path),
+        "message": f"Successfully deleted metric '{metric_id}'. Backup saved for recovery.",
+    }, indent=2)
+
+
+@mcp.tool()
+def restore_metric_from_backup(
+    backup_path: str,
+    customer: str | None = None,
+) -> str:
+    """Restore a metric from a backup file (WRITE OPERATION).
+
+    Use this to recover a deleted metric or undo changes.
+    The backup_path is provided in the response of apply_* operations.
+
+    Args:
+        backup_path: Path to the backup file (from a previous write operation).
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+
+    Returns:
+        JSON with success status and details.
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Load backup file
+    backup_file = Path(backup_path)
+    if not backup_file.exists():
+        return json.dumps({
+            "success": False,
+            "error": f"Backup file not found: {backup_path}",
+        }, indent=2)
+
+    with open(backup_file) as f:
+        backup = json.load(f)
+
+    object_type = backup.get("object_type")
+    object_id = backup.get("object_id")
+    data = backup.get("data")
+    backed_up_at = backup.get("backed_up_at")
+
+    if object_type != "metric":
+        return json.dumps({
+            "success": False,
+            "error": f"This function only restores metrics. Got: {object_type}",
+            "message": "Use restore_insight_from_backup for visualization objects.",
+        }, indent=2)
+
+    # Check if metric exists (update) or not (create)
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics/{object_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+        "Content-Type": "application/vnd.gooddata.api+json",
+    }
+
+    check_response = requests.get(url, headers=headers)
+    metric_exists = check_response.status_code == 200
+
+    try:
+        if metric_exists:
+            # Update existing metric
+            response = requests.put(url, headers=headers, json=data)
+        else:
+            # Create metric (was deleted)
+            create_url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics"
+            response = requests.post(create_url, headers=headers, json=data)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="restore_metric_from_backup",
+            object_id=object_id,
+            status="error",
+            details={"error": str(e), "backup_path": backup_path},
+        )
+        return json.dumps({
+            "success": False,
+            "error": f"Failed to restore metric: {e}",
+        }, indent=2)
+
+    # Log successful restore
+    _log_audit(
+        customer=customer_name,
+        operation="restore_metric_from_backup",
+        object_id=object_id,
+        status="success",
+        details={
+            "restored_from": backup_path,
+            "original_backup_time": backed_up_at,
+            "action": "updated" if metric_exists else "created",
+        },
+    )
+
+    return json.dumps({
+        "success": True,
+        "metric_id": object_id,
+        "action": "updated" if metric_exists else "recreated",
+        "restored_from": backup_path,
+        "original_backup_time": backed_up_at,
+        "message": f"Successfully restored metric from backup.",
+    }, indent=2)
+
+
+# =============================================================================
 # WRITE TOOLS (Two-Phase Commit: Preview → Apply)
 # =============================================================================
 
@@ -1312,6 +2179,957 @@ def restore_insight_from_backup(
         },
         indent=2,
     )
+
+
+# =============================================================================
+# INSIGHT CRUD OPERATIONS
+# =============================================================================
+
+# Supported visualization types
+VISUALIZATION_TYPES = {
+    "table": "local:table",
+    "bar": "local:bar",
+    "column": "local:column",
+    "line": "local:line",
+    "area": "local:area",
+    "pie": "local:pie",
+    "donut": "local:donut",
+    "headline": "local:headline",
+    "scatter": "local:scatter",
+    "bubble": "local:bubble",
+    "heatmap": "local:heatmap",
+    "treemap": "local:treemap",
+    "combo": "local:combo",
+    "combo2": "local:combo2",
+    "bullet": "local:bullet",
+    "geo": "local:pushpin",
+    "funnel": "local:funnel",
+    "pyramid": "local:pyramid",
+    "sankey": "local:sankey",
+    "dependencywheel": "local:dependencywheel",
+    "waterfall": "local:waterfall",
+    "repeater": "local:repeater",
+}
+
+
+@mcp.tool()
+def list_visualization_types() -> str:
+    """List all supported visualization types for insights.
+
+    Returns a JSON object mapping simple type names to their GoodData visualizationUrl values.
+    """
+    return json.dumps({
+        "visualization_types": VISUALIZATION_TYPES,
+        "usage": "Use the simple name (e.g., 'table', 'bar') when creating insights.",
+    }, indent=2)
+
+
+def _validate_metrics_exist(ws_id: str, metric_ids: list[str], sdk) -> tuple[bool, list[str]]:
+    """Validate that all metric IDs exist in the workspace.
+
+    Returns:
+        Tuple of (all_valid, missing_ids)
+    """
+    catalog = sdk.catalog_workspace_content.get_full_catalog(ws_id)
+    existing_metrics = {m.id for m in catalog.metrics}
+    missing = [m for m in metric_ids if m not in existing_metrics]
+    return len(missing) == 0, missing
+
+
+def _validate_labels_exist(ws_id: str, label_ids: list[str], sdk) -> tuple[bool, list[str]]:
+    """Validate that all label IDs exist in the workspace.
+
+    Returns:
+        Tuple of (all_valid, missing_ids)
+    """
+    # Get all labels from datasets
+    catalog = sdk.catalog_workspace_content.get_full_catalog(ws_id)
+    existing_labels = set()
+    for dataset in catalog.datasets:
+        for attr in dataset.attributes:
+            for label in attr.labels:
+                existing_labels.add(label.id)
+    missing = [l for l in label_ids if l not in existing_labels]
+    return len(missing) == 0, missing
+
+
+def _build_insight_content(
+    visualization_type: str,
+    metric_ids: list[str],
+    attribute_ids: list[str] | None = None,
+    filters: list[dict] | None = None,
+) -> dict:
+    """Build the insight content structure.
+
+    Args:
+        visualization_type: Simple type name (e.g., 'table', 'bar')
+        metric_ids: List of metric IDs to include
+        attribute_ids: Optional list of label IDs for grouping/rows
+        filters: Optional list of filter definitions
+
+    Returns:
+        The content dict for the visualization object
+    """
+    import uuid
+
+    # Build measures bucket
+    measures_items = []
+    for metric_id in metric_ids:
+        measures_items.append({
+            "measure": {
+                "localIdentifier": uuid.uuid4().hex[:32],
+                "definition": {
+                    "measureDefinition": {
+                        "item": {
+                            "identifier": {
+                                "id": metric_id,
+                                "type": "metric"
+                            }
+                        },
+                        "filters": []
+                    }
+                },
+                "title": metric_id  # Will be replaced by actual title
+            }
+        })
+
+    buckets = [
+        {
+            "localIdentifier": "measures",
+            "items": measures_items
+        }
+    ]
+
+    # Build attribute bucket if provided
+    if attribute_ids:
+        attribute_items = []
+        for label_id in attribute_ids:
+            attribute_items.append({
+                "attribute": {
+                    "localIdentifier": uuid.uuid4().hex[:32],
+                    "displayForm": {
+                        "identifier": {
+                            "id": label_id,
+                            "type": "label"
+                        }
+                    }
+                }
+            })
+        buckets.append({
+            "localIdentifier": "attribute",
+            "items": attribute_items
+        })
+
+    # Get the visualization URL
+    viz_url = VISUALIZATION_TYPES.get(visualization_type.lower(), "local:table")
+
+    return {
+        "buckets": buckets,
+        "filters": filters or [],
+        "sorts": [],
+        "properties": {},
+        "visualizationUrl": viz_url,
+        "version": "2"
+    }
+
+
+@mcp.tool()
+def preview_create_insight(
+    insight_id: str,
+    title: str,
+    visualization_type: str,
+    metric_ids: list[str],
+    customer: str | None = None,
+    attribute_ids: list[str] | None = None,
+    description: str | None = None,
+    filters: list[dict] | None = None,
+) -> str:
+    """Preview creating a new insight/visualization (READ-ONLY).
+
+    This validates the insight definition and shows what would be created.
+    No changes are made. Use apply_create_insight to execute the creation.
+
+    Args:
+        insight_id: The ID for the new insight (lowercase, underscores, no spaces).
+        title: Display title for the insight.
+        visualization_type: Type of visualization (table, bar, line, pie, etc.).
+            Use list_visualization_types() to see all options.
+        metric_ids: List of metric IDs to include in the insight.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+        attribute_ids: Optional list of label IDs for grouping/rows.
+        description: Optional description.
+        filters: Optional list of filter definitions.
+
+    Returns:
+        JSON with:
+        - insight_definition: The insight that would be created
+        - confirmation_token: Token to pass to apply_create_insight
+        - next_step: Instructions for applying the creation
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+    sdk = _get_sdk()
+
+    # Validate visualization type
+    if visualization_type.lower() not in VISUALIZATION_TYPES:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid visualization type: '{visualization_type}'",
+            "valid_types": list(VISUALIZATION_TYPES.keys()),
+        }, indent=2)
+
+    # Check if insight already exists
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/visualizationObjects/{insight_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return json.dumps({
+            "success": False,
+            "error": f"Insight '{insight_id}' already exists. Use preview_update_insight instead.",
+        }, indent=2)
+
+    # Validate metrics exist
+    metrics_valid, missing_metrics = _validate_metrics_exist(ws_id, metric_ids, sdk)
+    if not metrics_valid:
+        return json.dumps({
+            "success": False,
+            "error": "Some metrics do not exist in the workspace.",
+            "missing_metrics": missing_metrics,
+        }, indent=2)
+
+    # Validate attributes/labels exist
+    if attribute_ids:
+        labels_valid, missing_labels = _validate_labels_exist(ws_id, attribute_ids, sdk)
+        if not labels_valid:
+            return json.dumps({
+                "success": False,
+                "error": "Some labels/attributes do not exist in the workspace.",
+                "missing_labels": missing_labels,
+            }, indent=2)
+
+    # Build the insight definition for preview
+    content = _build_insight_content(visualization_type, metric_ids, attribute_ids, filters)
+
+    insight_definition = {
+        "id": insight_id,
+        "title": title,
+        "description": description or "",
+        "visualization_type": visualization_type,
+        "metric_ids": metric_ids,
+        "attribute_ids": attribute_ids or [],
+        "filters": filters or [],
+    }
+
+    # Generate confirmation token
+    token_data = f"create_insight:{insight_id}:{json.dumps(insight_definition, sort_keys=True)}"
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview action
+    _log_audit(
+        customer=customer_name,
+        operation="preview_create_insight",
+        object_id=insight_id,
+        status="preview",
+        details={"title": title, "visualization_type": visualization_type},
+    )
+
+    result = {
+        "success": True,
+        "action": "create_insight",
+        "insight_definition": insight_definition,
+        "content_preview": content,
+        "confirmation_token": confirmation_token,
+        "next_step": (
+            f"To create this insight, call: apply_create_insight("
+            f"insight_id='{insight_id}', title='{title}', "
+            f"visualization_type='{visualization_type}', "
+            f"metric_ids={metric_ids}, "
+            f"confirmation_token='{confirmation_token}', customer='{customer_name}')"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_create_insight(
+    insight_id: str,
+    title: str,
+    visualization_type: str,
+    metric_ids: list[str],
+    confirmation_token: str,
+    customer: str | None = None,
+    attribute_ids: list[str] | None = None,
+    description: str | None = None,
+    filters: list[dict] | None = None,
+) -> str:
+    """Create a new insight/visualization (WRITE OPERATION).
+
+    You must first call preview_create_insight to get the confirmation_token.
+
+    Args:
+        insight_id: The ID for the new insight (lowercase, underscores, no spaces).
+        title: Display title for the insight.
+        visualization_type: Type of visualization (table, bar, line, pie, etc.).
+        metric_ids: List of metric IDs to include in the insight.
+        confirmation_token: Token from preview_create_insight.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+        attribute_ids: Optional list of label IDs for grouping/rows.
+        description: Optional description.
+        filters: Optional list of filter definitions.
+
+    Returns:
+        JSON with:
+        - success: Whether the operation succeeded
+        - insight_id: The ID of the created insight
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Build and verify the insight definition matches token
+    insight_definition = {
+        "id": insight_id,
+        "title": title,
+        "description": description or "",
+        "visualization_type": visualization_type,
+        "metric_ids": metric_ids,
+        "attribute_ids": attribute_ids or [],
+        "filters": filters or [],
+    }
+
+    token_data = f"create_insight:{insight_id}:{json.dumps(insight_definition, sort_keys=True)}"
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_create_insight",
+            object_id=insight_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps({
+            "success": False,
+            "error": "Invalid confirmation token. Parameters may have changed since preview.",
+            "message": "Please run preview_create_insight again to get a new token.",
+        }, indent=2)
+
+    # Build the content
+    content = _build_insight_content(visualization_type, metric_ids, attribute_ids, filters)
+
+    # Build the API payload
+    payload = {
+        "data": {
+            "type": "visualizationObject",
+            "id": insight_id,
+            "attributes": {
+                "title": title,
+                "description": description or "",
+                "content": content,
+            },
+        }
+    }
+
+    # Create the insight via POST
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/visualizationObjects"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+        "Content-Type": "application/vnd.gooddata.api+json",
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_create_insight",
+            object_id=insight_id,
+            status="error",
+            details={"error": str(e)},
+        )
+        return json.dumps({
+            "success": False,
+            "error": f"Failed to create insight: {e}",
+        }, indent=2)
+
+    # Log successful creation
+    _log_audit(
+        customer=customer_name,
+        operation="apply_create_insight",
+        object_id=insight_id,
+        status="success",
+        details={"title": title, "visualization_type": visualization_type},
+    )
+
+    return json.dumps({
+        "success": True,
+        "insight_id": insight_id,
+        "title": title,
+        "visualization_type": visualization_type,
+        "message": f"Successfully created insight '{title}'.",
+    }, indent=2)
+
+
+@mcp.tool()
+def preview_update_insight(
+    insight_id: str,
+    customer: str | None = None,
+    title: str | None = None,
+    metric_ids: list[str] | None = None,
+    attribute_ids: list[str] | None = None,
+    description: str | None = None,
+    visualization_type: str | None = None,
+) -> str:
+    """Preview updating an existing insight (READ-ONLY).
+
+    This shows what changes would be made. A backup is created during preview.
+    No changes are made. Use apply_update_insight to execute the update.
+
+    Args:
+        insight_id: The ID of the insight to update.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+        title: New title (optional).
+        metric_ids: New list of metric IDs (replaces existing).
+        attribute_ids: New list of label IDs (replaces existing).
+        description: New description.
+        visualization_type: New visualization type.
+
+    Returns:
+        JSON with:
+        - current: Current insight state
+        - changes: What would change
+        - confirmation_token: Token to pass to apply_update_insight
+        - backup_path: Path to the backup file
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+    sdk = _get_sdk()
+
+    # Fetch current insight
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/visualizationObjects/{insight_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 404:
+        return json.dumps({
+            "success": False,
+            "error": f"Insight '{insight_id}' not found. Use preview_create_insight to create a new one.",
+        }, indent=2)
+    response.raise_for_status()
+    data = response.json()
+
+    # Create backup
+    backup_path = _save_backup(customer_name, "visualizationObject", insight_id, data)
+
+    current_attrs = data["data"]["attributes"]
+    current_content = current_attrs.get("content", {})
+
+    # Extract current state
+    current_state = {
+        "title": current_attrs.get("title", ""),
+        "description": current_attrs.get("description", ""),
+        "visualization_type": current_content.get("visualizationUrl", "").replace("local:", ""),
+    }
+
+    # Build changes dict
+    changes = {}
+    if title is not None and title != current_state["title"]:
+        changes["title"] = {"from": current_state["title"], "to": title}
+    if description is not None and description != current_state["description"]:
+        changes["description"] = {"from": current_state["description"], "to": description}
+    if visualization_type is not None:
+        current_viz = current_state["visualization_type"]
+        if visualization_type.lower() != current_viz:
+            if visualization_type.lower() not in VISUALIZATION_TYPES:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid visualization type: '{visualization_type}'",
+                    "valid_types": list(VISUALIZATION_TYPES.keys()),
+                }, indent=2)
+            changes["visualization_type"] = {"from": current_viz, "to": visualization_type}
+
+    # Validate new metrics if provided
+    if metric_ids is not None:
+        metrics_valid, missing_metrics = _validate_metrics_exist(ws_id, metric_ids, sdk)
+        if not metrics_valid:
+            return json.dumps({
+                "success": False,
+                "error": "Some metrics do not exist in the workspace.",
+                "missing_metrics": missing_metrics,
+            }, indent=2)
+        changes["metric_ids"] = {"to": metric_ids}
+
+    # Validate new attributes if provided
+    if attribute_ids is not None:
+        labels_valid, missing_labels = _validate_labels_exist(ws_id, attribute_ids, sdk)
+        if not labels_valid:
+            return json.dumps({
+                "success": False,
+                "error": "Some labels/attributes do not exist in the workspace.",
+                "missing_labels": missing_labels,
+            }, indent=2)
+        changes["attribute_ids"] = {"to": attribute_ids}
+
+    if not changes:
+        return json.dumps({
+            "success": True,
+            "message": "No changes specified.",
+            "current": current_state,
+        }, indent=2)
+
+    # Generate confirmation token
+    update_def = {
+        "insight_id": insight_id,
+        "changes": changes,
+    }
+    token_data = f"update_insight:{insight_id}:{json.dumps(update_def, sort_keys=True)}"
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview action
+    _log_audit(
+        customer=customer_name,
+        operation="preview_update_insight",
+        object_id=insight_id,
+        status="preview",
+        details={"changes": list(changes.keys())},
+    )
+
+    result = {
+        "success": True,
+        "action": "update_insight",
+        "insight_id": insight_id,
+        "current": current_state,
+        "changes": changes,
+        "backup_path": str(backup_path),
+        "confirmation_token": confirmation_token,
+        "next_step": (
+            f"To apply these changes, call: apply_update_insight("
+            f"insight_id='{insight_id}', confirmation_token='{confirmation_token}', "
+            f"customer='{customer_name}', ...changed_params...)"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_update_insight(
+    insight_id: str,
+    confirmation_token: str,
+    customer: str | None = None,
+    title: str | None = None,
+    metric_ids: list[str] | None = None,
+    attribute_ids: list[str] | None = None,
+    description: str | None = None,
+    visualization_type: str | None = None,
+) -> str:
+    """Update an existing insight (WRITE OPERATION).
+
+    You must first call preview_update_insight to get the confirmation_token.
+    A backup was already created during preview.
+
+    Args:
+        insight_id: The ID of the insight to update.
+        confirmation_token: Token from preview_update_insight.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+        title: New title (optional).
+        metric_ids: New list of metric IDs (replaces existing).
+        attribute_ids: New list of label IDs (replaces existing).
+        description: New description.
+        visualization_type: New visualization type.
+
+    Returns:
+        JSON with:
+        - success: Whether the operation succeeded
+        - insight_id: The ID of the updated insight
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current insight
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/visualizationObjects/{insight_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 404:
+        return json.dumps({
+            "success": False,
+            "error": f"Insight '{insight_id}' not found.",
+        }, indent=2)
+    response.raise_for_status()
+    data = response.json()
+
+    current_attrs = data["data"]["attributes"]
+    current_content = current_attrs.get("content", {})
+
+    # Build changes for token verification
+    current_state = {
+        "title": current_attrs.get("title", ""),
+        "description": current_attrs.get("description", ""),
+        "visualization_type": current_content.get("visualizationUrl", "").replace("local:", ""),
+    }
+
+    changes = {}
+    if title is not None and title != current_state["title"]:
+        changes["title"] = {"from": current_state["title"], "to": title}
+    if description is not None and description != current_state["description"]:
+        changes["description"] = {"from": current_state["description"], "to": description}
+    if visualization_type is not None:
+        current_viz = current_state["visualization_type"]
+        if visualization_type.lower() != current_viz:
+            changes["visualization_type"] = {"from": current_viz, "to": visualization_type}
+    if metric_ids is not None:
+        changes["metric_ids"] = {"to": metric_ids}
+    if attribute_ids is not None:
+        changes["attribute_ids"] = {"to": attribute_ids}
+
+    # Verify token
+    update_def = {
+        "insight_id": insight_id,
+        "changes": changes,
+    }
+    token_data = f"update_insight:{insight_id}:{json.dumps(update_def, sort_keys=True)}"
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_update_insight",
+            object_id=insight_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps({
+            "success": False,
+            "error": "Invalid confirmation token. The insight may have changed since preview.",
+            "message": "Please run preview_update_insight again to get a new token.",
+        }, indent=2)
+
+    # Apply changes to the data
+    if title is not None:
+        current_attrs["title"] = title
+    if description is not None:
+        current_attrs["description"] = description
+
+    # Rebuild content if metrics, attributes, or viz type changed
+    if metric_ids is not None or attribute_ids is not None or visualization_type is not None:
+        new_viz_type = visualization_type or current_state["visualization_type"]
+        # Use new values or extract from current
+        new_metric_ids = metric_ids
+        new_attribute_ids = attribute_ids
+
+        if new_metric_ids is None:
+            # Extract current metric IDs
+            new_metric_ids = []
+            for bucket in current_content.get("buckets", []):
+                if bucket.get("localIdentifier") == "measures":
+                    for item in bucket.get("items", []):
+                        if "measure" in item:
+                            metric_def = item["measure"].get("definition", {}).get("measureDefinition", {})
+                            metric_id = metric_def.get("item", {}).get("identifier", {}).get("id")
+                            if metric_id:
+                                new_metric_ids.append(metric_id)
+
+        if new_attribute_ids is None:
+            # Extract current attribute IDs
+            new_attribute_ids = []
+            for bucket in current_content.get("buckets", []):
+                if bucket.get("localIdentifier") == "attribute":
+                    for item in bucket.get("items", []):
+                        if "attribute" in item:
+                            label_id = item["attribute"].get("displayForm", {}).get("identifier", {}).get("id")
+                            if label_id:
+                                new_attribute_ids.append(label_id)
+
+        current_attrs["content"] = _build_insight_content(
+            new_viz_type, new_metric_ids, new_attribute_ids, current_content.get("filters")
+        )
+
+    # Update via PUT
+    headers["Content-Type"] = "application/vnd.gooddata.api+json"
+    try:
+        response = requests.put(url, headers=headers, json=data)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_update_insight",
+            object_id=insight_id,
+            status="error",
+            details={"error": str(e)},
+        )
+        return json.dumps({
+            "success": False,
+            "error": f"Failed to update insight: {e}",
+            "message": "Backup was saved during preview. Use restore_insight_from_backup to restore if needed.",
+        }, indent=2)
+
+    # Log successful update
+    _log_audit(
+        customer=customer_name,
+        operation="apply_update_insight",
+        object_id=insight_id,
+        status="success",
+        details={"changes": list(changes.keys())},
+    )
+
+    return json.dumps({
+        "success": True,
+        "insight_id": insight_id,
+        "changes_applied": list(changes.keys()),
+        "message": f"Successfully updated insight '{insight_id}'.",
+    }, indent=2)
+
+
+@mcp.tool()
+def preview_delete_insight(
+    insight_id: str,
+    customer: str | None = None,
+) -> str:
+    """Preview deleting an insight (READ-ONLY).
+
+    This creates a backup and shows what would be deleted.
+    No changes are made. Use apply_delete_insight to execute the deletion.
+
+    Args:
+        insight_id: The ID of the insight to delete.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+
+    Returns:
+        JSON with:
+        - insight_to_delete: The insight that would be deleted
+        - confirmation_token: Token to pass to apply_delete_insight
+        - backup_path: Path to the backup file
+        - warning: Deletion warning message
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current insight
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/visualizationObjects/{insight_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 404:
+        return json.dumps({
+            "success": False,
+            "error": f"Insight '{insight_id}' not found.",
+        }, indent=2)
+    response.raise_for_status()
+    data = response.json()
+
+    # Create backup
+    backup_path = _save_backup(customer_name, "visualizationObject", insight_id, data)
+
+    current_attrs = data["data"]["attributes"]
+    title = current_attrs.get("title", "")
+
+    # Generate confirmation token
+    token_data = f"delete_insight:{insight_id}:{title}"
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview action
+    _log_audit(
+        customer=customer_name,
+        operation="preview_delete_insight",
+        object_id=insight_id,
+        status="preview",
+        details={"title": title, "backup_path": str(backup_path)},
+    )
+
+    result = {
+        "success": True,
+        "action": "delete_insight",
+        "insight_to_delete": {
+            "id": insight_id,
+            "title": title,
+        },
+        "backup_path": str(backup_path),
+        "confirmation_token": confirmation_token,
+        "warning": "THIS WILL PERMANENTLY DELETE THE INSIGHT. A backup has been created.",
+        "next_step": (
+            f"To delete this insight, call: apply_delete_insight("
+            f"insight_id='{insight_id}', confirmation_token='{confirmation_token}', "
+            f"customer='{customer_name}')"
+        ),
+        "restore_info": (
+            f"To restore after deletion, call: restore_insight_from_backup("
+            f"backup_path='{backup_path}', customer='{customer_name}')"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_delete_insight(
+    insight_id: str,
+    confirmation_token: str,
+    customer: str | None = None,
+) -> str:
+    """Delete an insight (WRITE OPERATION).
+
+    You must first call preview_delete_insight to get the confirmation_token.
+    A backup was already created during preview.
+
+    Args:
+        insight_id: The ID of the insight to delete.
+        confirmation_token: Token from preview_delete_insight.
+        customer: The customer name (tpp, dlg, danceone). Auto-detects from CWD if not provided.
+
+    Returns:
+        JSON with:
+        - success: Whether the operation succeeded
+        - deleted_insight_id: The ID of the deleted insight
+        - backup_path: Path to the backup for potential restore
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current insight to verify token
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/visualizationObjects/{insight_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 404:
+        return json.dumps({
+            "success": False,
+            "error": f"Insight '{insight_id}' not found.",
+        }, indent=2)
+    response.raise_for_status()
+    data = response.json()
+
+    title = data["data"]["attributes"].get("title", "")
+
+    # Verify token
+    token_data = f"delete_insight:{insight_id}:{title}"
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_delete_insight",
+            object_id=insight_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps({
+            "success": False,
+            "error": "Invalid confirmation token. The insight may have changed since preview.",
+            "message": "Please run preview_delete_insight again to get a new token.",
+        }, indent=2)
+
+    # Find the backup path for reference
+    backup_dir = _get_backup_dir(customer_name)
+    backup_files = sorted(backup_dir.glob(f"visualizationObject_{insight_id[:8]}_*.json"), reverse=True)
+    backup_path = str(backup_files[0]) if backup_files else "unknown"
+
+    # Delete via DELETE
+    try:
+        response = requests.delete(url, headers=headers)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_delete_insight",
+            object_id=insight_id,
+            status="error",
+            details={"error": str(e)},
+        )
+        return json.dumps({
+            "success": False,
+            "error": f"Failed to delete insight: {e}",
+        }, indent=2)
+
+    # Log successful deletion
+    _log_audit(
+        customer=customer_name,
+        operation="apply_delete_insight",
+        object_id=insight_id,
+        status="success",
+        details={"title": title, "backup_path": backup_path},
+    )
+
+    return json.dumps({
+        "success": True,
+        "deleted_insight_id": insight_id,
+        "deleted_title": title,
+        "backup_path": backup_path,
+        "message": f"Successfully deleted insight '{title}'.",
+        "restore_info": f"To restore, call: restore_insight_from_backup(backup_path='{backup_path}', customer='{customer_name}')",
+    }, indent=2)
 
 
 # =============================================================================

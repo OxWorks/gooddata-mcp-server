@@ -7,7 +7,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from gooddata_cli import query, export
+from gooddata_cli import query, export, sync
 
 console = Console()
 
@@ -237,6 +237,113 @@ def export_xlsx(visualization_id: str, workspace: str | None, output: str | None
             visualization_id, workspace, output, format="XLSX"
         )
         console.print(f"[green]Exported to:[/green] {path}")
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+# ============================================================================
+# Sync Commands
+# ============================================================================
+
+
+@main.group()
+def sync_cmd():
+    """Sync GoodData artifacts to local cache."""
+    pass
+
+
+main.add_command(sync_cmd, name="sync")
+
+
+@sync_cmd.command("all")
+@click.option("--no-children", is_flag=True, help="Skip child workspaces")
+@click.option("--only", multiple=True, help="Only sync specific artifacts (ldm, analytics_model, catalog)")
+def sync_all(no_children: bool, only: tuple[str, ...]):
+    """Sync all configured customers."""
+    try:
+        artifacts = list(only) if only else None
+        sync.sync_all(
+            include_children=not no_children,
+            artifacts=artifacts,
+        )
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@sync_cmd.command("customer")
+@click.argument("customer_name")
+@click.option("--no-children", is_flag=True, help="Skip child workspaces")
+@click.option("--only", multiple=True, help="Only sync specific artifacts (ldm, analytics_model, catalog)")
+def sync_customer(customer_name: str, no_children: bool, only: tuple[str, ...]):
+    """Sync a specific customer (tpp, dlg, danceone)."""
+    try:
+        artifacts = list(only) if only else None
+        sync.sync_customer(
+            customer_name=customer_name,
+            include_children=not no_children,
+            artifacts=artifacts,
+        )
+        console.print(f"\n[green]Sync complete for {customer_name}![/green]")
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@sync_cmd.command("status")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def sync_status(as_json: bool):
+    """Show sync status for all customers."""
+    try:
+        status = sync.get_sync_status()
+
+        if as_json:
+            click.echo(json.dumps(status, indent=2))
+        else:
+            for customer, info in status.items():
+                console.print(f"\n[bold cyan]{customer.upper()}[/bold cyan]")
+                console.print(f"  Project: {info['project_path']}")
+
+                if info["parent"]:
+                    parent = info["parent"]
+                    if parent.get("synced_at"):
+                        console.print(f"  [green]Parent:[/green] Last synced {parent['synced_at']}")
+                    else:
+                        console.print(f"  [yellow]Parent:[/yellow] {parent.get('status', 'unknown')}")
+
+                if info["child"]:
+                    child = info["child"]
+                    if child.get("synced_at"):
+                        console.print(f"  [green]Child:[/green] Last synced {child['synced_at']}")
+                    else:
+                        console.print(f"  [yellow]Child:[/yellow] {child.get('status', 'unknown')}")
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@sync_cmd.command("list")
+def sync_list():
+    """List configured customers."""
+    try:
+        customers = sync.get_customers()
+
+        table = Table(title="Configured Customers")
+        table.add_column("Customer", style="cyan")
+        table.add_column("Workspace ID", style="green")
+        table.add_column("Project Path", style="yellow")
+
+        for name, info in customers.items():
+            table.add_row(
+                name,
+                info["workspace_id"],
+                info["project_path"],
+            )
+
+        console.print(table)
 
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")

@@ -259,7 +259,9 @@ main.add_command(sync_cmd, name="sync")
 
 @sync_cmd.command("all")
 @click.option("--no-children", is_flag=True, help="Skip child workspaces")
-@click.option("--only", multiple=True, help="Only sync specific artifacts (ldm, analytics_model, catalog)")
+@click.option(
+    "--only", multiple=True, help="Only sync specific artifacts (ldm, analytics_model, catalog)"
+)
 def sync_all(no_children: bool, only: tuple[str, ...]):
     """Sync all configured customers."""
     try:
@@ -276,7 +278,9 @@ def sync_all(no_children: bool, only: tuple[str, ...]):
 @sync_cmd.command("customer")
 @click.argument("customer_name")
 @click.option("--no-children", is_flag=True, help="Skip child workspaces")
-@click.option("--only", multiple=True, help="Only sync specific artifacts (ldm, analytics_model, catalog)")
+@click.option(
+    "--only", multiple=True, help="Only sync specific artifacts (ldm, analytics_model, catalog)"
+)
 def sync_customer(customer_name: str, no_children: bool, only: tuple[str, ...]):
     """Sync a specific customer (tpp, dlg, danceone)."""
     try:
@@ -311,7 +315,9 @@ def sync_status(as_json: bool):
                     if parent.get("synced_at"):
                         console.print(f"  [green]Parent:[/green] Last synced {parent['synced_at']}")
                     else:
-                        console.print(f"  [yellow]Parent:[/yellow] {parent.get('status', 'unknown')}")
+                        console.print(
+                            f"  [yellow]Parent:[/yellow] {parent.get('status', 'unknown')}"
+                        )
 
                 if info["child"]:
                     child = info["child"]

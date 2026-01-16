@@ -1047,11 +1047,14 @@ def preview_update_metric(
         proposed_changes["tags"] = {"from": current_values["tags"], "to": tags}
 
     if not proposed_changes:
-        return json.dumps({
-            "metric_id": metric_id,
-            "message": "No changes proposed. All provided values match current values.",
-            "current_values": current_values,
-        }, indent=2)
+        return json.dumps(
+            {
+                "metric_id": metric_id,
+                "message": "No changes proposed. All provided values match current values.",
+                "current_values": current_values,
+            },
+            indent=2,
+        )
 
     # Generate confirmation token
     token_data = f"{metric_id}:{json.dumps(proposed_changes, sort_keys=True)}"
@@ -1168,10 +1171,13 @@ def apply_update_metric(
         proposed_changes["tags"] = {"from": current_values["tags"], "to": tags}
 
     if not proposed_changes:
-        return json.dumps({
-            "success": False,
-            "error": "No changes to apply. All provided values match current values.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": "No changes to apply. All provided values match current values.",
+            },
+            indent=2,
+        )
 
     # Verify confirmation token matches current state
     token_data = f"{metric_id}:{json.dumps(proposed_changes, sort_keys=True)}"
@@ -1185,11 +1191,14 @@ def apply_update_metric(
             status="error",
             details={"reason": "token_mismatch"},
         )
-        return json.dumps({
-            "success": False,
-            "error": "Invalid confirmation token. The metric may have changed since preview.",
-            "message": "Please run preview_update_metric again to get a new token.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. The metric may have changed since preview.",
+                "message": "Please run preview_update_metric again to get a new token.",
+            },
+            indent=2,
+        )
 
     # Save backup BEFORE making any changes
     backup_path = _save_backup(customer_name, "metric", metric_id, data)
@@ -1218,12 +1227,15 @@ def apply_update_metric(
             status="error",
             details={"error": str(e), "backup_path": str(backup_path)},
         )
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to update metric: {e}",
-            "backup_path": str(backup_path),
-            "message": "Backup was saved. Use restore_metric_from_backup to restore if needed.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to update metric: {e}",
+                "backup_path": str(backup_path),
+                "message": "Backup was saved. Use restore_metric_from_backup to restore if needed.",
+            },
+            indent=2,
+        )
 
     # Log successful change
     _log_audit(
@@ -1237,13 +1249,16 @@ def apply_update_metric(
         },
     )
 
-    return json.dumps({
-        "success": True,
-        "metric_id": metric_id,
-        "backup_path": str(backup_path),
-        "changes_applied": proposed_changes,
-        "message": f"Successfully updated metric '{metric_id}'. Backup saved.",
-    }, indent=2)
+    return json.dumps(
+        {
+            "success": True,
+            "metric_id": metric_id,
+            "backup_path": str(backup_path),
+            "changes_applied": proposed_changes,
+            "message": f"Successfully updated metric '{metric_id}'. Backup saved.",
+        },
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -1297,10 +1312,13 @@ def preview_create_metric(
 
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        return json.dumps({
-            "success": False,
-            "error": f"Metric '{metric_id}' already exists. Use preview_update_metric instead.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Metric '{metric_id}' already exists. Use preview_update_metric instead.",
+            },
+            indent=2,
+        )
 
     # Build the metric definition
     metric_definition = {
@@ -1402,11 +1420,14 @@ def apply_create_metric(
             status="error",
             details={"reason": "token_mismatch"},
         )
-        return json.dumps({
-            "success": False,
-            "error": "Invalid confirmation token. Parameters may have changed since preview.",
-            "message": "Please run preview_create_metric again to get a new token.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. Parameters may have changed since preview.",
+                "message": "Please run preview_create_metric again to get a new token.",
+            },
+            indent=2,
+        )
 
     # Build the API payload
     payload = {
@@ -1444,10 +1465,13 @@ def apply_create_metric(
             status="error",
             details={"error": str(e)},
         )
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to create metric: {e}",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to create metric: {e}",
+            },
+            indent=2,
+        )
 
     # Log successful creation
     _log_audit(
@@ -1458,12 +1482,15 @@ def apply_create_metric(
         details={"title": title, "maql": maql},
     )
 
-    return json.dumps({
-        "success": True,
-        "metric_id": metric_id,
-        "title": title,
-        "message": f"Successfully created metric '{metric_id}'.",
-    }, indent=2)
+    return json.dumps(
+        {
+            "success": True,
+            "metric_id": metric_id,
+            "title": title,
+            "message": f"Successfully created metric '{metric_id}'.",
+        },
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -1507,10 +1534,13 @@ def preview_delete_metric(
 
     response = requests.get(url, headers=headers)
     if response.status_code == 404:
-        return json.dumps({
-            "success": False,
-            "error": f"Metric '{metric_id}' not found.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Metric '{metric_id}' not found.",
+            },
+            indent=2,
+        )
     response.raise_for_status()
     data = response.json()
 
@@ -1598,10 +1628,13 @@ def apply_delete_metric(
 
     response = requests.get(url, headers=headers)
     if response.status_code == 404:
-        return json.dumps({
-            "success": False,
-            "error": f"Metric '{metric_id}' not found.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Metric '{metric_id}' not found.",
+            },
+            indent=2,
+        )
     response.raise_for_status()
     data = response.json()
 
@@ -1619,11 +1652,14 @@ def apply_delete_metric(
             status="error",
             details={"reason": "token_mismatch"},
         )
-        return json.dumps({
-            "success": False,
-            "error": "Invalid confirmation token. The metric may have changed since preview.",
-            "message": "Please run preview_delete_metric again to get a new token.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. The metric may have changed since preview.",
+                "message": "Please run preview_delete_metric again to get a new token.",
+            },
+            indent=2,
+        )
 
     # Save backup BEFORE deletion
     backup_path = _save_backup(customer_name, "metric", metric_id, data)
@@ -1640,11 +1676,14 @@ def apply_delete_metric(
             status="error",
             details={"error": str(e), "backup_path": str(backup_path)},
         )
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to delete metric: {e}",
-            "backup_path": str(backup_path),
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to delete metric: {e}",
+                "backup_path": str(backup_path),
+            },
+            indent=2,
+        )
 
     # Log successful deletion
     _log_audit(
@@ -1658,13 +1697,16 @@ def apply_delete_metric(
         },
     )
 
-    return json.dumps({
-        "success": True,
-        "metric_id": metric_id,
-        "title": attrs.get("title"),
-        "backup_path": str(backup_path),
-        "message": f"Successfully deleted metric '{metric_id}'. Backup saved for recovery.",
-    }, indent=2)
+    return json.dumps(
+        {
+            "success": True,
+            "metric_id": metric_id,
+            "title": attrs.get("title"),
+            "backup_path": str(backup_path),
+            "message": f"Successfully deleted metric '{metric_id}'. Backup saved for recovery.",
+        },
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -1699,10 +1741,13 @@ def restore_metric_from_backup(
     # Load backup file
     backup_file = Path(backup_path)
     if not backup_file.exists():
-        return json.dumps({
-            "success": False,
-            "error": f"Backup file not found: {backup_path}",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Backup file not found: {backup_path}",
+            },
+            indent=2,
+        )
 
     with open(backup_file) as f:
         backup = json.load(f)
@@ -1713,11 +1758,14 @@ def restore_metric_from_backup(
     backed_up_at = backup.get("backed_up_at")
 
     if object_type != "metric":
-        return json.dumps({
-            "success": False,
-            "error": f"This function only restores metrics. Got: {object_type}",
-            "message": "Use restore_insight_from_backup for visualization objects.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"This function only restores metrics. Got: {object_type}",
+                "message": "Use restore_insight_from_backup for visualization objects.",
+            },
+            indent=2,
+        )
 
     # Check if metric exists (update) or not (create)
     url = f"{host}/api/v1/entities/workspaces/{ws_id}/metrics/{object_id}"
@@ -1747,10 +1795,13 @@ def restore_metric_from_backup(
             status="error",
             details={"error": str(e), "backup_path": backup_path},
         )
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to restore metric: {e}",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to restore metric: {e}",
+            },
+            indent=2,
+        )
 
     # Log successful restore
     _log_audit(
@@ -1765,14 +1816,17 @@ def restore_metric_from_backup(
         },
     )
 
-    return json.dumps({
-        "success": True,
-        "metric_id": object_id,
-        "action": "updated" if metric_exists else "recreated",
-        "restored_from": backup_path,
-        "original_backup_time": backed_up_at,
-        "message": "Successfully restored metric from backup.",
-    }, indent=2)
+    return json.dumps(
+        {
+            "success": True,
+            "metric_id": object_id,
+            "action": "updated" if metric_exists else "recreated",
+            "restored_from": backup_path,
+            "original_backup_time": backed_up_at,
+            "message": "Successfully restored metric from backup.",
+        },
+        indent=2,
+    )
 
 
 # =============================================================================
@@ -2218,10 +2272,13 @@ def list_visualization_types() -> str:
 
     Returns a JSON object mapping simple type names to their GoodData visualizationUrl values.
     """
-    return json.dumps({
-        "visualization_types": VISUALIZATION_TYPES,
-        "usage": "Use the simple name (e.g., 'table', 'bar') when creating insights.",
-    }, indent=2)
+    return json.dumps(
+        {
+            "visualization_types": VISUALIZATION_TYPES,
+            "usage": "Use the simple name (e.g., 'table', 'bar') when creating insights.",
+        },
+        indent=2,
+    )
 
 
 def _validate_metrics_exist(ws_id: str, metric_ids: list[str], sdk) -> tuple[bool, list[str]]:
@@ -2275,50 +2332,36 @@ def _build_insight_content(
     # Build measures bucket
     measures_items = []
     for metric_id in metric_ids:
-        measures_items.append({
-            "measure": {
-                "localIdentifier": uuid.uuid4().hex[:32],
-                "definition": {
-                    "measureDefinition": {
-                        "item": {
-                            "identifier": {
-                                "id": metric_id,
-                                "type": "metric"
-                            }
-                        },
-                        "filters": []
-                    }
-                },
-                "title": metric_id  # Will be replaced by actual title
+        measures_items.append(
+            {
+                "measure": {
+                    "localIdentifier": uuid.uuid4().hex[:32],
+                    "definition": {
+                        "measureDefinition": {
+                            "item": {"identifier": {"id": metric_id, "type": "metric"}},
+                            "filters": [],
+                        }
+                    },
+                    "title": metric_id,  # Will be replaced by actual title
+                }
             }
-        })
+        )
 
-    buckets = [
-        {
-            "localIdentifier": "measures",
-            "items": measures_items
-        }
-    ]
+    buckets = [{"localIdentifier": "measures", "items": measures_items}]
 
     # Build attribute bucket if provided
     if attribute_ids:
         attribute_items = []
         for label_id in attribute_ids:
-            attribute_items.append({
-                "attribute": {
-                    "localIdentifier": uuid.uuid4().hex[:32],
-                    "displayForm": {
-                        "identifier": {
-                            "id": label_id,
-                            "type": "label"
-                        }
+            attribute_items.append(
+                {
+                    "attribute": {
+                        "localIdentifier": uuid.uuid4().hex[:32],
+                        "displayForm": {"identifier": {"id": label_id, "type": "label"}},
                     }
                 }
-            })
-        buckets.append({
-            "localIdentifier": "attribute",
-            "items": attribute_items
-        })
+            )
+        buckets.append({"localIdentifier": "attribute", "items": attribute_items})
 
     # Get the visualization URL
     viz_url = VISUALIZATION_TYPES.get(visualization_type.lower(), "local:table")
@@ -2329,7 +2372,7 @@ def _build_insight_content(
         "sorts": [],
         "properties": {},
         "visualizationUrl": viz_url,
-        "version": "2"
+        "version": "2",
     }
 
 
@@ -2381,11 +2424,14 @@ def preview_create_insight(
 
     # Validate visualization type
     if visualization_type.lower() not in VISUALIZATION_TYPES:
-        return json.dumps({
-            "success": False,
-            "error": f"Invalid visualization type: '{visualization_type}'",
-            "valid_types": list(VISUALIZATION_TYPES.keys()),
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Invalid visualization type: '{visualization_type}'",
+                "valid_types": list(VISUALIZATION_TYPES.keys()),
+            },
+            indent=2,
+        )
 
     # Check if insight already exists
     url = f"{host}/api/v1/entities/workspaces/{ws_id}/visualizationObjects/{insight_id}"
@@ -2396,29 +2442,38 @@ def preview_create_insight(
 
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        return json.dumps({
-            "success": False,
-            "error": f"Insight '{insight_id}' already exists. Use preview_update_insight instead.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Insight '{insight_id}' already exists. Use preview_update_insight instead.",
+            },
+            indent=2,
+        )
 
     # Validate metrics exist
     metrics_valid, missing_metrics = _validate_metrics_exist(ws_id, metric_ids, sdk)
     if not metrics_valid:
-        return json.dumps({
-            "success": False,
-            "error": "Some metrics do not exist in the workspace.",
-            "missing_metrics": missing_metrics,
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Some metrics do not exist in the workspace.",
+                "missing_metrics": missing_metrics,
+            },
+            indent=2,
+        )
 
     # Validate attributes/labels exist
     if attribute_ids:
         labels_valid, missing_labels = _validate_labels_exist(ws_id, attribute_ids, sdk)
         if not labels_valid:
-            return json.dumps({
-                "success": False,
-                "error": "Some labels/attributes do not exist in the workspace.",
-                "missing_labels": missing_labels,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "Some labels/attributes do not exist in the workspace.",
+                    "missing_labels": missing_labels,
+                },
+                indent=2,
+            )
 
     # Build the insight definition for preview
     content = _build_insight_content(visualization_type, metric_ids, attribute_ids, filters)
@@ -2530,11 +2585,14 @@ def apply_create_insight(
             status="error",
             details={"reason": "token_mismatch"},
         )
-        return json.dumps({
-            "success": False,
-            "error": "Invalid confirmation token. Parameters may have changed since preview.",
-            "message": "Please run preview_create_insight again to get a new token.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. Parameters may have changed since preview.",
+                "message": "Please run preview_create_insight again to get a new token.",
+            },
+            indent=2,
+        )
 
     # Build the content
     content = _build_insight_content(visualization_type, metric_ids, attribute_ids, filters)
@@ -2571,10 +2629,13 @@ def apply_create_insight(
             status="error",
             details={"error": str(e)},
         )
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to create insight: {e}",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to create insight: {e}",
+            },
+            indent=2,
+        )
 
     # Log successful creation
     _log_audit(
@@ -2585,13 +2646,16 @@ def apply_create_insight(
         details={"title": title, "visualization_type": visualization_type},
     )
 
-    return json.dumps({
-        "success": True,
-        "insight_id": insight_id,
-        "title": title,
-        "visualization_type": visualization_type,
-        "message": f"Successfully created insight '{title}'.",
-    }, indent=2)
+    return json.dumps(
+        {
+            "success": True,
+            "insight_id": insight_id,
+            "title": title,
+            "visualization_type": visualization_type,
+            "message": f"Successfully created insight '{title}'.",
+        },
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -2647,10 +2711,13 @@ def preview_update_insight(
 
     response = requests.get(url, headers=headers)
     if response.status_code == 404:
-        return json.dumps({
-            "success": False,
-            "error": f"Insight '{insight_id}' not found. Use preview_create_insight to create a new one.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Insight '{insight_id}' not found. Use preview_create_insight to create a new one.",
+            },
+            indent=2,
+        )
     response.raise_for_status()
     data = response.json()
 
@@ -2677,41 +2744,53 @@ def preview_update_insight(
         current_viz = current_state["visualization_type"]
         if visualization_type.lower() != current_viz:
             if visualization_type.lower() not in VISUALIZATION_TYPES:
-                return json.dumps({
-                    "success": False,
-                    "error": f"Invalid visualization type: '{visualization_type}'",
-                    "valid_types": list(VISUALIZATION_TYPES.keys()),
-                }, indent=2)
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": f"Invalid visualization type: '{visualization_type}'",
+                        "valid_types": list(VISUALIZATION_TYPES.keys()),
+                    },
+                    indent=2,
+                )
             changes["visualization_type"] = {"from": current_viz, "to": visualization_type}
 
     # Validate new metrics if provided
     if metric_ids is not None:
         metrics_valid, missing_metrics = _validate_metrics_exist(ws_id, metric_ids, sdk)
         if not metrics_valid:
-            return json.dumps({
-                "success": False,
-                "error": "Some metrics do not exist in the workspace.",
-                "missing_metrics": missing_metrics,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "Some metrics do not exist in the workspace.",
+                    "missing_metrics": missing_metrics,
+                },
+                indent=2,
+            )
         changes["metric_ids"] = {"to": metric_ids}
 
     # Validate new attributes if provided
     if attribute_ids is not None:
         labels_valid, missing_labels = _validate_labels_exist(ws_id, attribute_ids, sdk)
         if not labels_valid:
-            return json.dumps({
-                "success": False,
-                "error": "Some labels/attributes do not exist in the workspace.",
-                "missing_labels": missing_labels,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "Some labels/attributes do not exist in the workspace.",
+                    "missing_labels": missing_labels,
+                },
+                indent=2,
+            )
         changes["attribute_ids"] = {"to": attribute_ids}
 
     if not changes:
-        return json.dumps({
-            "success": True,
-            "message": "No changes specified.",
-            "current": current_state,
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": True,
+                "message": "No changes specified.",
+                "current": current_state,
+            },
+            indent=2,
+        )
 
     # Generate confirmation token
     update_def = {
@@ -2800,10 +2879,13 @@ def apply_update_insight(
 
     response = requests.get(url, headers=headers)
     if response.status_code == 404:
-        return json.dumps({
-            "success": False,
-            "error": f"Insight '{insight_id}' not found.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Insight '{insight_id}' not found.",
+            },
+            indent=2,
+        )
     response.raise_for_status()
     data = response.json()
 
@@ -2847,11 +2929,14 @@ def apply_update_insight(
             status="error",
             details={"reason": "token_mismatch"},
         )
-        return json.dumps({
-            "success": False,
-            "error": "Invalid confirmation token. The insight may have changed since preview.",
-            "message": "Please run preview_update_insight again to get a new token.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. The insight may have changed since preview.",
+                "message": "Please run preview_update_insight again to get a new token.",
+            },
+            indent=2,
+        )
 
     # Apply changes to the data
     if title is not None:
@@ -2873,7 +2958,9 @@ def apply_update_insight(
                 if bucket.get("localIdentifier") == "measures":
                     for item in bucket.get("items", []):
                         if "measure" in item:
-                            metric_def = item["measure"].get("definition", {}).get("measureDefinition", {})
+                            metric_def = (
+                                item["measure"].get("definition", {}).get("measureDefinition", {})
+                            )
                             metric_id = metric_def.get("item", {}).get("identifier", {}).get("id")
                             if metric_id:
                                 new_metric_ids.append(metric_id)
@@ -2885,7 +2972,12 @@ def apply_update_insight(
                 if bucket.get("localIdentifier") == "attribute":
                     for item in bucket.get("items", []):
                         if "attribute" in item:
-                            label_id = item["attribute"].get("displayForm", {}).get("identifier", {}).get("id")
+                            label_id = (
+                                item["attribute"]
+                                .get("displayForm", {})
+                                .get("identifier", {})
+                                .get("id")
+                            )
                             if label_id:
                                 new_attribute_ids.append(label_id)
 
@@ -2906,11 +2998,14 @@ def apply_update_insight(
             status="error",
             details={"error": str(e)},
         )
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to update insight: {e}",
-            "message": "Backup was saved during preview. Use restore_insight_from_backup to restore if needed.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to update insight: {e}",
+                "message": "Backup was saved during preview. Use restore_insight_from_backup to restore if needed.",
+            },
+            indent=2,
+        )
 
     # Log successful update
     _log_audit(
@@ -2921,12 +3016,15 @@ def apply_update_insight(
         details={"changes": list(changes.keys())},
     )
 
-    return json.dumps({
-        "success": True,
-        "insight_id": insight_id,
-        "changes_applied": list(changes.keys()),
-        "message": f"Successfully updated insight '{insight_id}'.",
-    }, indent=2)
+    return json.dumps(
+        {
+            "success": True,
+            "insight_id": insight_id,
+            "changes_applied": list(changes.keys()),
+            "message": f"Successfully updated insight '{insight_id}'.",
+        },
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -2971,10 +3069,13 @@ def preview_delete_insight(
 
     response = requests.get(url, headers=headers)
     if response.status_code == 404:
-        return json.dumps({
-            "success": False,
-            "error": f"Insight '{insight_id}' not found.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Insight '{insight_id}' not found.",
+            },
+            indent=2,
+        )
     response.raise_for_status()
     data = response.json()
 
@@ -3064,10 +3165,13 @@ def apply_delete_insight(
 
     response = requests.get(url, headers=headers)
     if response.status_code == 404:
-        return json.dumps({
-            "success": False,
-            "error": f"Insight '{insight_id}' not found.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Insight '{insight_id}' not found.",
+            },
+            indent=2,
+        )
     response.raise_for_status()
     data = response.json()
 
@@ -3085,15 +3189,20 @@ def apply_delete_insight(
             status="error",
             details={"reason": "token_mismatch"},
         )
-        return json.dumps({
-            "success": False,
-            "error": "Invalid confirmation token. The insight may have changed since preview.",
-            "message": "Please run preview_delete_insight again to get a new token.",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. The insight may have changed since preview.",
+                "message": "Please run preview_delete_insight again to get a new token.",
+            },
+            indent=2,
+        )
 
     # Find the backup path for reference
     backup_dir = _get_backup_dir(customer_name)
-    backup_files = sorted(backup_dir.glob(f"visualizationObject_{insight_id[:8]}_*.json"), reverse=True)
+    backup_files = sorted(
+        backup_dir.glob(f"visualizationObject_{insight_id[:8]}_*.json"), reverse=True
+    )
     backup_path = str(backup_files[0]) if backup_files else "unknown"
 
     # Delete via DELETE
@@ -3108,10 +3217,13 @@ def apply_delete_insight(
             status="error",
             details={"error": str(e)},
         )
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to delete insight: {e}",
-        }, indent=2)
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to delete insight: {e}",
+            },
+            indent=2,
+        )
 
     # Log successful deletion
     _log_audit(
@@ -3122,14 +3234,17 @@ def apply_delete_insight(
         details={"title": title, "backup_path": backup_path},
     )
 
-    return json.dumps({
-        "success": True,
-        "deleted_insight_id": insight_id,
-        "deleted_title": title,
-        "backup_path": backup_path,
-        "message": f"Successfully deleted insight '{title}'.",
-        "restore_info": f"To restore, call: restore_insight_from_backup(backup_path='{backup_path}', customer='{customer_name}')",
-    }, indent=2)
+    return json.dumps(
+        {
+            "success": True,
+            "deleted_insight_id": insight_id,
+            "deleted_title": title,
+            "backup_path": backup_path,
+            "message": f"Successfully deleted insight '{title}'.",
+            "restore_info": f"To restore, call: restore_insight_from_backup(backup_path='{backup_path}', customer='{customer_name}')",
+        },
+        indent=2,
+    )
 
 
 # =============================================================================

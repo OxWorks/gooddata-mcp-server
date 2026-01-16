@@ -20,8 +20,7 @@ def load_config() -> dict[str, Any]:
     """Load workspace configuration from ~/.config/gooddata/workspaces.yaml."""
     if not CONFIG_PATH.exists():
         raise FileNotFoundError(
-            f"Config file not found: {CONFIG_PATH}\n"
-            "Create it with customer workspace mappings."
+            f"Config file not found: {CONFIG_PATH}\nCreate it with customer workspace mappings."
         )
 
     with open(CONFIG_PATH) as f:
@@ -100,7 +99,9 @@ def sync_workspace(
                 "datasets": len(datasets),
                 "date_instances": len(date_instances),
             }
-            print(f"  [LDM] {display_name}: {len(datasets)} datasets, {len(date_instances)} date instances")
+            print(
+                f"  [LDM] {display_name}: {len(datasets)} datasets, {len(date_instances)} date instances"
+            )
         except Exception as e:
             results["artifacts"]["ldm"] = {"success": False, "error": str(e)}
             print(f"  [LDM] {display_name}: ERROR - {e}")
@@ -160,14 +161,8 @@ def sync_workspace(
                     {
                         "id": ds.id,
                         "title": ds.title,
-                        "attributes": [
-                            {"id": a.id, "title": a.title}
-                            for a in ds.attributes
-                        ],
-                        "facts": [
-                            {"id": f.id, "title": f.title}
-                            for f in ds.facts
-                        ],
+                        "attributes": [{"id": a.id, "title": a.title} for a in ds.attributes],
+                        "facts": [{"id": f.id, "title": f.title} for f in ds.facts],
                     }
                     for ds in catalog.datasets
                 ],
@@ -224,8 +219,7 @@ def sync_customer(
 
     if customer_name not in customers:
         raise ValueError(
-            f"Customer '{customer_name}' not found in config. "
-            f"Available: {list(customers.keys())}"
+            f"Customer '{customer_name}' not found in config. Available: {list(customers.keys())}"
         )
 
     customer = customers[customer_name]

@@ -5,7 +5,6 @@ to local JSON files in each customer's project directory.
 """
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any

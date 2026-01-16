@@ -1771,7 +1771,7 @@ def restore_metric_from_backup(
         "action": "updated" if metric_exists else "recreated",
         "restored_from": backup_path,
         "original_backup_time": backed_up_at,
-        "message": f"Successfully restored metric from backup.",
+        "message": "Successfully restored metric from backup.",
     }, indent=2)
 
 
@@ -2249,7 +2249,7 @@ def _validate_labels_exist(ws_id: str, label_ids: list[str], sdk) -> tuple[bool,
         for attr in dataset.attributes:
             for label in attr.labels:
                 existing_labels.add(label.id)
-    missing = [l for l in label_ids if l not in existing_labels]
+    missing = [label_id for label_id in label_ids if label_id not in existing_labels]
     return len(missing) == 0, missing
 
 

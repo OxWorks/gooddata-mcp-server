@@ -2310,6 +2310,95 @@ def _validate_labels_exist(ws_id: str, label_ids: list[str], sdk) -> tuple[bool,
     return len(missing) == 0, missing
 
 
+def _validate_insights_exist(ws_id: str, insight_ids: list[str], sdk) -> tuple[bool, list[str]]:
+    """Validate that all insight IDs exist in the workspace.
+
+    Returns:
+        Tuple of (all_valid, missing_ids)
+    """
+    am = sdk.catalog_workspace_content.get_declarative_analytics_model(ws_id)
+    existing_insights = {viz.id for viz in am.analytics.visualization_objects}
+    missing = [i for i in insight_ids if i not in existing_insights]
+    return len(missing) == 0, missing
+
+
+def _build_dashboard_layout(
+    insight_ids: list[str],
+    columns: int = 2,
+    section_title: str | None = None,
+) -> dict:
+    """Build a simple dashboard layout from insight IDs.
+
+    Creates a single section with insights arranged in a grid.
+
+    Args:
+        insight_ids: List of insight IDs to include.
+        columns: Number of columns (1-4).
+        section_title: Optional section header.
+
+    Returns:
+        Dashboard content dict ready for API.
+    """
+    # Calculate grid width per column (total grid is 12 units)
+    grid_width = 12 // columns
+
+    # Build items
+    items = []
+    for insight_id in insight_ids:
+        item = {
+            "type": "IDashboardLayoutItem",
+            "widget": {
+                "type": "insight",
+                "insight": {"identifier": {"id": insight_id, "type": "visualizationObject"}},
+                "ignoreDashboardFilters": [],
+                "drills": [],
+                "title": "",  # Uses insight's title
+                "description": "",
+            },
+            "size": {"xl": {"gridWidth": grid_width, "gridHeight": 22}},  # Default height
+        }
+        items.append(item)
+
+    # Build section
+    section = {
+        "type": "IDashboardLayoutSection",
+        "header": {"title": section_title} if section_title else {},
+        "items": items,
+    }
+
+    # Build layout
+    layout = {"type": "IDashboardLayout", "sections": [section]}
+
+    return {"layout": layout, "version": "2"}
+
+
+def _get_dashboard_by_id(host: str, token: str, ws_id: str, dashboard_id: str) -> dict | None:
+    """Fetch dashboard by ID using direct API call.
+
+    Args:
+        host: GoodData host URL.
+        token: API token.
+        ws_id: Workspace ID.
+        dashboard_id: Dashboard ID.
+
+    Returns:
+        Full API response data, or None if not found.
+    """
+    import requests
+
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/analyticalDashboards/{dashboard_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.json()
+
+
 def _build_insight_content(
     visualization_type: str,
     metric_ids: list[str],
@@ -3242,6 +3331,931 @@ def apply_delete_insight(
             "backup_path": backup_path,
             "message": f"Successfully deleted insight '{title}'.",
             "restore_info": f"To restore, call: restore_insight_from_backup(backup_path='{backup_path}', customer='{customer_name}')",
+        },
+        indent=2,
+    )
+
+
+# =============================================================================
+# WRITE OPERATIONS (Dashboards)
+# =============================================================================
+
+
+@mcp.tool()
+def preview_create_dashboard(
+    dashboard_id: str,
+    title: str,
+    insight_ids: list[str],
+    customer: str | None = None,
+    description: str | None = None,
+    section_title: str | None = None,
+    columns: int = 2,
+) -> str:
+    """Preview creating a new dashboard (READ-ONLY).
+
+    Creates a simple dashboard with insights arranged in a grid.
+    For complex layouts, use update_dashboard after creation.
+
+    Args:
+        dashboard_id: ID for the new dashboard (lowercase, underscores).
+        title: Display title for the dashboard.
+        insight_ids: List of insight IDs to include as widgets.
+        customer: Customer name (auto-detects from CWD).
+        description: Optional description.
+        section_title: Optional title for the main section.
+        columns: Number of columns (1-4). Insights fill left-to-right.
+
+    Returns:
+        JSON with dashboard_definition, confirmation_token, next_step.
+    """
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+    sdk = _get_sdk()
+
+    # Validate columns
+    if columns < 1 or columns > 4:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Invalid columns value: {columns}. Must be 1-4.",
+            },
+            indent=2,
+        )
+
+    # Check if dashboard already exists
+    existing = _get_dashboard_by_id(host, token, ws_id, dashboard_id)
+    if existing is not None:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Dashboard '{dashboard_id}' already exists. Use preview_update_dashboard instead.",
+            },
+            indent=2,
+        )
+
+    # Validate insights exist (can be empty for dashboard with no initial insights)
+    if insight_ids:
+        insights_valid, missing_insights = _validate_insights_exist(ws_id, insight_ids, sdk)
+        if not insights_valid:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "Some insights do not exist in the workspace.",
+                    "missing_insights": missing_insights,
+                },
+                indent=2,
+            )
+
+    # Build dashboard content
+    content = _build_dashboard_layout(insight_ids, columns, section_title)
+
+    # Build the definition for token generation
+    dashboard_definition = {
+        "id": dashboard_id,
+        "title": title,
+        "description": description or "",
+        "insight_ids": insight_ids,
+        "columns": columns,
+        "section_title": section_title,
+    }
+
+    # Generate confirmation token
+    token_data = (
+        f"create_dashboard:{dashboard_id}:{json.dumps(dashboard_definition, sort_keys=True)}"
+    )
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview
+    _log_audit(
+        customer=customer_name,
+        operation="preview_create_dashboard",
+        object_id=dashboard_id,
+        status="preview",
+        details={"title": title, "insight_count": len(insight_ids)},
+    )
+
+    result = {
+        "success": True,
+        "action": "create_dashboard",
+        "dashboard_definition": dashboard_definition,
+        "content_preview": content,
+        "confirmation_token": confirmation_token,
+        "next_step": (
+            f"To create this dashboard, call: apply_create_dashboard("
+            f"dashboard_id='{dashboard_id}', title='{title}', "
+            f"insight_ids={insight_ids}, confirmation_token='{confirmation_token}', "
+            f"customer='{customer_name}')"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_create_dashboard(
+    dashboard_id: str,
+    title: str,
+    insight_ids: list[str],
+    confirmation_token: str,
+    customer: str | None = None,
+    description: str | None = None,
+    section_title: str | None = None,
+    columns: int = 2,
+) -> str:
+    """Create a new dashboard (WRITE OPERATION).
+
+    You must first call preview_create_dashboard to get the confirmation_token.
+
+    Args:
+        dashboard_id: ID for the new dashboard (lowercase, underscores).
+        title: Display title for the dashboard.
+        insight_ids: List of insight IDs to include as widgets.
+        confirmation_token: Token from preview_create_dashboard.
+        customer: Customer name (auto-detects from CWD).
+        description: Optional description.
+        section_title: Optional title for the main section.
+        columns: Number of columns (1-4).
+
+    Returns:
+        JSON with success status and dashboard_id.
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Build and verify the definition matches token
+    dashboard_definition = {
+        "id": dashboard_id,
+        "title": title,
+        "description": description or "",
+        "insight_ids": insight_ids,
+        "columns": columns,
+        "section_title": section_title,
+    }
+
+    token_data = (
+        f"create_dashboard:{dashboard_id}:{json.dumps(dashboard_definition, sort_keys=True)}"
+    )
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_create_dashboard",
+            object_id=dashboard_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. Parameters may have changed since preview.",
+                "message": "Please run preview_create_dashboard again to get a new token.",
+            },
+            indent=2,
+        )
+
+    # Build the dashboard content
+    content = _build_dashboard_layout(insight_ids, columns, section_title)
+
+    # Build the API payload
+    payload = {
+        "data": {
+            "type": "analyticalDashboard",
+            "id": dashboard_id,
+            "attributes": {
+                "title": title,
+                "description": description or "",
+                "content": content,
+            },
+        }
+    }
+
+    # Create the dashboard via POST
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/analyticalDashboards"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+        "Content-Type": "application/vnd.gooddata.api+json",
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_create_dashboard",
+            object_id=dashboard_id,
+            status="error",
+            details={"error": str(e)},
+        )
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to create dashboard: {e}",
+            },
+            indent=2,
+        )
+
+    # Log successful creation
+    _log_audit(
+        customer=customer_name,
+        operation="apply_create_dashboard",
+        object_id=dashboard_id,
+        status="success",
+        details={"title": title, "insight_count": len(insight_ids)},
+    )
+
+    return json.dumps(
+        {
+            "success": True,
+            "dashboard_id": dashboard_id,
+            "title": title,
+            "insight_count": len(insight_ids),
+            "message": f"Successfully created dashboard '{title}'.",
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+def preview_update_dashboard(
+    dashboard_id: str,
+    customer: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    insight_ids: list[str] | None = None,
+    add_insight_ids: list[str] | None = None,
+    remove_insight_ids: list[str] | None = None,
+) -> str:
+    """Preview updating an existing dashboard (READ-ONLY).
+
+    Creates a backup before showing changes.
+    No changes are made. Use apply_update_dashboard to execute the update.
+
+    Args:
+        dashboard_id: The ID of the dashboard to update.
+        customer: Customer name (auto-detects from CWD).
+        title: New title (optional).
+        description: New description (optional).
+        insight_ids: Replace all insights with this list (optional).
+        add_insight_ids: Add these insights to existing (optional).
+        remove_insight_ids: Remove these insights from existing (optional).
+
+    Returns:
+        JSON with current state, changes, backup_path, and confirmation_token.
+    """
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+    sdk = _get_sdk()
+
+    # Fetch current dashboard
+    data = _get_dashboard_by_id(host, token, ws_id, dashboard_id)
+    if data is None:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Dashboard '{dashboard_id}' not found. Use preview_create_dashboard to create a new one.",
+            },
+            indent=2,
+        )
+
+    # Create backup
+    backup_path = _save_backup(customer_name, "analyticalDashboard", dashboard_id, data)
+
+    current_attrs = data["data"]["attributes"]
+    current_content = current_attrs.get("content", {})
+    current_layout = current_content.get("layout", {})
+
+    # Extract current insight IDs from layout
+    current_insight_ids = []
+    for section in current_layout.get("sections", []):
+        for item in section.get("items", []):
+            widget = item.get("widget", {})
+            if widget.get("type") == "insight":
+                insight_ref = widget.get("insight", {}).get("identifier", {})
+                if insight_ref.get("id"):
+                    current_insight_ids.append(insight_ref["id"])
+
+    current_state = {
+        "title": current_attrs.get("title", ""),
+        "description": current_attrs.get("description", ""),
+        "insight_ids": current_insight_ids,
+    }
+
+    # Build changes dict
+    changes = {}
+    if title is not None and title != current_state["title"]:
+        changes["title"] = {"from": current_state["title"], "to": title}
+    if description is not None and description != current_state["description"]:
+        changes["description"] = {"from": current_state["description"], "to": description}
+
+    # Calculate new insight list
+    new_insight_ids = None
+    if insight_ids is not None:
+        # Replace all insights
+        new_insight_ids = insight_ids
+    elif add_insight_ids is not None or remove_insight_ids is not None:
+        # Modify existing list
+        new_insight_ids = list(current_insight_ids)
+        if add_insight_ids:
+            for iid in add_insight_ids:
+                if iid not in new_insight_ids:
+                    new_insight_ids.append(iid)
+        if remove_insight_ids:
+            new_insight_ids = [iid for iid in new_insight_ids if iid not in remove_insight_ids]
+
+    if new_insight_ids is not None and new_insight_ids != current_insight_ids:
+        # Validate new insights exist
+        insights_to_validate = [iid for iid in new_insight_ids if iid not in current_insight_ids]
+        if insights_to_validate:
+            insights_valid, missing_insights = _validate_insights_exist(
+                ws_id, insights_to_validate, sdk
+            )
+            if not insights_valid:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": "Some insights do not exist in the workspace.",
+                        "missing_insights": missing_insights,
+                    },
+                    indent=2,
+                )
+        changes["insight_ids"] = {"from": current_insight_ids, "to": new_insight_ids}
+
+    if not changes:
+        return json.dumps(
+            {
+                "success": True,
+                "message": "No changes specified.",
+                "current": current_state,
+            },
+            indent=2,
+        )
+
+    # Generate confirmation token
+    update_def = {
+        "dashboard_id": dashboard_id,
+        "changes": changes,
+    }
+    token_data = f"update_dashboard:{dashboard_id}:{json.dumps(update_def, sort_keys=True)}"
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview
+    _log_audit(
+        customer=customer_name,
+        operation="preview_update_dashboard",
+        object_id=dashboard_id,
+        status="preview",
+        details={"changes": list(changes.keys())},
+    )
+
+    result = {
+        "success": True,
+        "action": "update_dashboard",
+        "dashboard_id": dashboard_id,
+        "current": current_state,
+        "changes": changes,
+        "backup_path": str(backup_path),
+        "confirmation_token": confirmation_token,
+        "next_step": (
+            f"To apply these changes, call: apply_update_dashboard("
+            f"dashboard_id='{dashboard_id}', confirmation_token='{confirmation_token}', "
+            f"customer='{customer_name}', ...changed_params...)"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_update_dashboard(
+    dashboard_id: str,
+    confirmation_token: str,
+    customer: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    insight_ids: list[str] | None = None,
+    add_insight_ids: list[str] | None = None,
+    remove_insight_ids: list[str] | None = None,
+) -> str:
+    """Update an existing dashboard (WRITE OPERATION).
+
+    You must first call preview_update_dashboard to get the confirmation_token.
+    A backup was already created during preview.
+
+    Args:
+        dashboard_id: The ID of the dashboard to update.
+        confirmation_token: Token from preview_update_dashboard.
+        customer: Customer name (auto-detects from CWD).
+        title: New title (optional).
+        description: New description (optional).
+        insight_ids: Replace all insights with this list (optional).
+        add_insight_ids: Add these insights to existing (optional).
+        remove_insight_ids: Remove these insights from existing (optional).
+
+    Returns:
+        JSON with success status and changes applied.
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current dashboard
+    data = _get_dashboard_by_id(host, token, ws_id, dashboard_id)
+    if data is None:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Dashboard '{dashboard_id}' not found.",
+            },
+            indent=2,
+        )
+
+    current_attrs = data["data"]["attributes"]
+    current_content = current_attrs.get("content", {})
+    current_layout = current_content.get("layout", {})
+
+    # Extract current insight IDs
+    current_insight_ids = []
+    for section in current_layout.get("sections", []):
+        for item in section.get("items", []):
+            widget = item.get("widget", {})
+            if widget.get("type") == "insight":
+                insight_ref = widget.get("insight", {}).get("identifier", {})
+                if insight_ref.get("id"):
+                    current_insight_ids.append(insight_ref["id"])
+
+    current_state = {
+        "title": current_attrs.get("title", ""),
+        "description": current_attrs.get("description", ""),
+        "insight_ids": current_insight_ids,
+    }
+
+    # Build changes for token verification
+    changes = {}
+    if title is not None and title != current_state["title"]:
+        changes["title"] = {"from": current_state["title"], "to": title}
+    if description is not None and description != current_state["description"]:
+        changes["description"] = {"from": current_state["description"], "to": description}
+
+    # Calculate new insight list
+    new_insight_ids = None
+    if insight_ids is not None:
+        new_insight_ids = insight_ids
+    elif add_insight_ids is not None or remove_insight_ids is not None:
+        new_insight_ids = list(current_insight_ids)
+        if add_insight_ids:
+            for iid in add_insight_ids:
+                if iid not in new_insight_ids:
+                    new_insight_ids.append(iid)
+        if remove_insight_ids:
+            new_insight_ids = [iid for iid in new_insight_ids if iid not in remove_insight_ids]
+
+    if new_insight_ids is not None and new_insight_ids != current_insight_ids:
+        changes["insight_ids"] = {"from": current_insight_ids, "to": new_insight_ids}
+
+    # Verify token
+    update_def = {
+        "dashboard_id": dashboard_id,
+        "changes": changes,
+    }
+    token_data = f"update_dashboard:{dashboard_id}:{json.dumps(update_def, sort_keys=True)}"
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_update_dashboard",
+            object_id=dashboard_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. The dashboard may have changed since preview.",
+                "message": "Please run preview_update_dashboard again to get a new token.",
+            },
+            indent=2,
+        )
+
+    # Apply changes
+    if title is not None:
+        current_attrs["title"] = title
+    if description is not None:
+        current_attrs["description"] = description
+
+    # Rebuild layout if insights changed
+    if new_insight_ids is not None and new_insight_ids != current_insight_ids:
+        # Preserve section title if it exists
+        section_title = None
+        if current_layout.get("sections"):
+            section_title = current_layout["sections"][0].get("header", {}).get("title")
+        # Rebuild content with new insights (default to 2 columns)
+        current_attrs["content"] = _build_dashboard_layout(new_insight_ids, 2, section_title)
+
+    # Update via PUT
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/analyticalDashboards/{dashboard_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+        "Content-Type": "application/vnd.gooddata.api+json",
+    }
+
+    try:
+        response = requests.put(url, headers=headers, json=data)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_update_dashboard",
+            object_id=dashboard_id,
+            status="error",
+            details={"error": str(e)},
+        )
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to update dashboard: {e}",
+                "message": "Backup was saved during preview. Use restore_dashboard_from_backup to restore if needed.",
+            },
+            indent=2,
+        )
+
+    # Log successful update
+    _log_audit(
+        customer=customer_name,
+        operation="apply_update_dashboard",
+        object_id=dashboard_id,
+        status="success",
+        details={"changes": list(changes.keys())},
+    )
+
+    return json.dumps(
+        {
+            "success": True,
+            "dashboard_id": dashboard_id,
+            "changes_applied": list(changes.keys()),
+            "message": f"Successfully updated dashboard '{dashboard_id}'.",
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+def preview_delete_dashboard(
+    dashboard_id: str,
+    customer: str | None = None,
+) -> str:
+    """Preview deleting a dashboard (READ-ONLY).
+
+    This creates a backup and shows what would be deleted.
+    No changes are made. Use apply_delete_dashboard to execute the deletion.
+
+    Args:
+        dashboard_id: The ID of the dashboard to delete.
+        customer: Customer name (auto-detects from CWD).
+
+    Returns:
+        JSON with dashboard_to_delete, confirmation_token, backup_path, warning.
+    """
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current dashboard
+    data = _get_dashboard_by_id(host, token, ws_id, dashboard_id)
+    if data is None:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Dashboard '{dashboard_id}' not found.",
+            },
+            indent=2,
+        )
+
+    # Create backup
+    backup_path = _save_backup(customer_name, "analyticalDashboard", dashboard_id, data)
+
+    current_attrs = data["data"]["attributes"]
+    dashboard_title = current_attrs.get("title", "")
+
+    # Generate confirmation token
+    token_data = f"delete_dashboard:{dashboard_id}:{dashboard_title}"
+    confirmation_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    # Log the preview
+    _log_audit(
+        customer=customer_name,
+        operation="preview_delete_dashboard",
+        object_id=dashboard_id,
+        status="preview",
+        details={"title": dashboard_title, "backup_path": str(backup_path)},
+    )
+
+    result = {
+        "success": True,
+        "action": "delete_dashboard",
+        "dashboard_to_delete": {
+            "id": dashboard_id,
+            "title": dashboard_title,
+        },
+        "backup_path": str(backup_path),
+        "confirmation_token": confirmation_token,
+        "warning": "THIS WILL PERMANENTLY DELETE THE DASHBOARD. A backup has been created.",
+        "next_step": (
+            f"To delete this dashboard, call: apply_delete_dashboard("
+            f"dashboard_id='{dashboard_id}', confirmation_token='{confirmation_token}', "
+            f"customer='{customer_name}')"
+        ),
+        "restore_info": (
+            f"To restore after deletion, call: restore_dashboard_from_backup("
+            f"backup_path='{backup_path}', customer='{customer_name}')"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def apply_delete_dashboard(
+    dashboard_id: str,
+    confirmation_token: str,
+    customer: str | None = None,
+) -> str:
+    """Delete a dashboard (WRITE OPERATION).
+
+    You must first call preview_delete_dashboard to get the confirmation_token.
+    A backup was already created during preview.
+
+    Args:
+        dashboard_id: The ID of the dashboard to delete.
+        confirmation_token: Token from preview_delete_dashboard.
+        customer: Customer name (auto-detects from CWD).
+
+    Returns:
+        JSON with success status, deleted_dashboard_id, backup_path.
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Fetch current dashboard to verify token
+    data = _get_dashboard_by_id(host, token, ws_id, dashboard_id)
+    if data is None:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Dashboard '{dashboard_id}' not found.",
+            },
+            indent=2,
+        )
+
+    dashboard_title = data["data"]["attributes"].get("title", "")
+
+    # Verify token
+    token_data = f"delete_dashboard:{dashboard_id}:{dashboard_title}"
+    expected_token = hashlib.sha256(token_data.encode()).hexdigest()[:16]
+
+    if confirmation_token != expected_token:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_delete_dashboard",
+            object_id=dashboard_id,
+            status="error",
+            details={"reason": "token_mismatch"},
+        )
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid confirmation token. The dashboard may have changed since preview.",
+                "message": "Please run preview_delete_dashboard again to get a new token.",
+            },
+            indent=2,
+        )
+
+    # Find backup path
+    backup_dir = _get_backup_dir(customer_name)
+    backup_files = sorted(backup_dir.glob(f"analyticalDashboard_{dashboard_id[:8]}_*.json"))
+    backup_path = str(backup_files[-1]) if backup_files else "unknown"
+
+    # Delete via DELETE
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/analyticalDashboards/{dashboard_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+    }
+
+    try:
+        response = requests.delete(url, headers=headers)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="apply_delete_dashboard",
+            object_id=dashboard_id,
+            status="error",
+            details={"error": str(e)},
+        )
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to delete dashboard: {e}",
+            },
+            indent=2,
+        )
+
+    # Log successful deletion
+    _log_audit(
+        customer=customer_name,
+        operation="apply_delete_dashboard",
+        object_id=dashboard_id,
+        status="success",
+        details={"title": dashboard_title, "backup_path": backup_path},
+    )
+
+    return json.dumps(
+        {
+            "success": True,
+            "deleted_dashboard_id": dashboard_id,
+            "deleted_title": dashboard_title,
+            "backup_path": backup_path,
+            "message": f"Successfully deleted dashboard '{dashboard_title}'.",
+            "restore_info": (
+                f"To restore, call: restore_dashboard_from_backup("
+                f"backup_path='{backup_path}', customer='{customer_name}')"
+            ),
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+def restore_dashboard_from_backup(
+    backup_path: str,
+    customer: str | None = None,
+) -> str:
+    """Restore a dashboard from a backup file (WRITE OPERATION).
+
+    Use this to recover a deleted dashboard or undo changes.
+    The backup_path is provided in the response of apply_* operations.
+
+    Args:
+        backup_path: Path to the backup file (from a previous write operation).
+        customer: Customer name (auto-detects from CWD).
+
+    Returns:
+        JSON with success status and details.
+    """
+    import requests
+
+    _load_env()
+    host = os.getenv("GOODDATA_HOST")
+    token = os.getenv("GOODDATA_TOKEN")
+
+    if not host or not token:
+        raise ValueError("GOODDATA_HOST and GOODDATA_TOKEN must be set")
+
+    customer_name = _resolve_customer_name(customer)
+    ws_id = _resolve_workspace_id(customer)
+
+    # Read the backup file
+    backup_file = Path(backup_path)
+    if not backup_file.exists():
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Backup file not found: {backup_path}",
+            },
+            indent=2,
+        )
+
+    with open(backup_file) as f:
+        backup_data = json.load(f)
+
+    # Verify backup type
+    if backup_data.get("object_type") != "analyticalDashboard":
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Invalid backup type: {backup_data.get('object_type')}. Expected 'analyticalDashboard'.",
+            },
+            indent=2,
+        )
+
+    original_data = backup_data.get("data", {})
+    dashboard_id = backup_data.get("object_id")
+
+    if not dashboard_id or not original_data:
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Invalid backup file structure.",
+            },
+            indent=2,
+        )
+
+    # Check if dashboard exists (PUT for update) or needs to be created (POST)
+    existing = _get_dashboard_by_id(host, token, ws_id, dashboard_id)
+
+    url = f"{host}/api/v1/entities/workspaces/{ws_id}/analyticalDashboards"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.gooddata.api+json",
+        "Content-Type": "application/vnd.gooddata.api+json",
+    }
+
+    try:
+        if existing is not None:
+            # Update existing
+            url = f"{url}/{dashboard_id}"
+            response = requests.put(url, headers=headers, json=original_data)
+        else:
+            # Create new
+            response = requests.post(url, headers=headers, json=original_data)
+        response.raise_for_status()
+    except Exception as e:
+        _log_audit(
+            customer=customer_name,
+            operation="restore_dashboard_from_backup",
+            object_id=dashboard_id,
+            status="error",
+            details={"error": str(e), "backup_path": backup_path},
+        )
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Failed to restore dashboard: {e}",
+            },
+            indent=2,
+        )
+
+    # Log successful restore
+    _log_audit(
+        customer=customer_name,
+        operation="restore_dashboard_from_backup",
+        object_id=dashboard_id,
+        status="success",
+        details={"backup_path": backup_path},
+    )
+
+    dashboard_title = original_data.get("data", {}).get("attributes", {}).get("title", "")
+
+    return json.dumps(
+        {
+            "success": True,
+            "dashboard_id": dashboard_id,
+            "title": dashboard_title,
+            "message": f"Successfully restored dashboard '{dashboard_title}' from backup.",
+            "action": "updated" if existing else "created",
         },
         indent=2,
     )

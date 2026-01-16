@@ -122,6 +122,18 @@ gooddata list workspaces --json
 | `apply_remove_duplicate_metrics` | Remove duplicate metrics |
 | `restore_insight_from_backup` | Restore from backup |
 
+### Write Operations (Dashboards)
+
+| Tool | Description |
+|------|-------------|
+| `preview_create_dashboard` | Preview creating a dashboard |
+| `apply_create_dashboard` | Create a dashboard |
+| `preview_update_dashboard` | Preview updating a dashboard |
+| `apply_update_dashboard` | Update a dashboard |
+| `preview_delete_dashboard` | Preview deleting a dashboard |
+| `apply_delete_dashboard` | Delete a dashboard |
+| `restore_dashboard_from_backup` | Restore from backup |
+
 ## Project Structure
 
 ```
